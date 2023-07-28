@@ -2,6 +2,7 @@
 
 use std::fmt::Display;
 
+#[derive(Copy, Clone)]
 pub enum Value {
     Num(f64),
 }

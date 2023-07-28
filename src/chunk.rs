@@ -37,6 +37,7 @@ impl TryFrom<u8> for OpCode {
     }
 }
 
+// TODO Add a way to access code bytes and constants to remove pub visbility
 pub struct Chunk {
     lines: Vec<(usize, u32)>, // bytecode -> src line. RLE (line_no, repeat {min: 1})
     code: Vec<u8>,
@@ -58,7 +59,7 @@ impl Chunk {
         // if last exists and last.line is same as curr_line
         if let Some(prev_line) = self.lines.last_mut() {
             if prev_line.0 == line {
-                prev_line.1 = prev_line.1 + 1;
+                prev_line.1 += 1;
                 return self;
             }
         }
@@ -68,13 +69,24 @@ impl Chunk {
         self
     }
 
+    pub fn get_byte(&self, index: usize) -> Option<&u8> {
+        self.code.get(index)
+    }
+
     pub fn add_op(&mut self, op: OpCode, line: usize) -> &mut Self {
         self.add_byte(op as u8, line)
     }
 
     pub fn add_constant(&mut self, val: Value) -> usize {
+        let len = self.constants.len();
+        assert!(len < u16::MAX as usize);
+
         self.constants.add(val);
-        self.constants.len()
+        len + 1
+    }
+
+    pub fn get_constant(&self, index: usize) -> Option<&Value> {
+        self.constants.get(index)
     }
 
     // Returns (source_line_num, whether_this_line_mapped_to_chunk_is_repeated )
@@ -87,7 +99,7 @@ impl Chunk {
         for (line, repeat) in self.lines.iter() {
             lines_skipped += *repeat as usize;
 
-            if lines_skipped - 1 >= offset {
+            if lines_skipped > offset {
                 let repeated_line = lines_skipped - offset < *repeat as usize; // at the first element
                 return Some((*line, repeated_line));
             }
@@ -101,12 +113,12 @@ pub fn disassemble(chunk: &Chunk, name: &str) {
     println!("== {name} ==");
 
     let mut offset = 0;
-    while let Some(off) = disassemble_instruction(&chunk, offset) {
+    while let Some(off) = disassemble_instruction(chunk, offset) {
         offset = off;
     }
 }
 
-fn disassemble_instruction(chunk: &Chunk, offset: usize) -> Option<usize> {
+pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> Option<usize> {
     let instruction = *chunk.code.get(offset)?;
 
     // Check if the line is the same, if yes print |
@@ -139,36 +151,52 @@ fn simple_op(op: OpCode, offset: usize) -> usize {
 }
 
 fn const_op(chunk: &Chunk, offset: usize) -> usize {
-    let check_valid = || -> Option<(u8, &Value)> {
-        let constant_idx = *chunk.code.get(offset + 1)?;
-        let value = chunk.constants.get(constant_idx as usize)?;
+    print!("{} ", OpCode::Constant);
 
-        Some((constant_idx, value))
-    };
+    let index = chunk.code.get(offset + 1);
+    match index {
+        None => println!("; {}", "Abrupt End".red()),
+        Some(index) => {
+            print!("{index:2x} ");
 
-    match check_valid() {
-        None => println!("{} ; {}", OpCode::Constant, "Abrupt End".red()),
-        Some((idx, val)) => println!("{} {idx:4} ; {val}", OpCode::Constant),
-    };
+            let value = chunk.constants.get(*index as usize);
+            match value {
+                None => println!("; {}", "No Value".red()),
+                Some(value) => println!("; {value}"),
+            }
+        }
+    }
 
     offset + 2
 }
 
 fn const_long_op(chunk: &Chunk, offset: usize) -> usize {
-    let check_valid = || -> Option<(usize, &Value)> {
-        let idx0 = *chunk.code.get(offset + 1)?;
-        let idx1 = *chunk.code.get(offset + 2)?;
+    print!("{} ", OpCode::ConstantLong);
 
-        let constant_idx  = (idx1 << 8 | idx0) as usize;
-        let value = chunk.constants.get(constant_idx)?;
+    let idx0 = chunk.code.get(offset + 1);
+    match idx0 {
+        None => println!("; {}", "Abrupt End".red()),
 
-        Some((constant_idx, value))
-    };
+        Some(idx0) => {
+            print!("{idx0:2x} ");
 
-    match check_valid() {
-        None => println!("{} ; {}", OpCode::Constant, "Abrupt End".red()),
-        Some((idx, val)) => println!("{} {idx:4} ; {val}", OpCode::Constant),
-    };
+            let idx1 = chunk.code.get(offset + 2);
+            match idx1 {
+                None => println!("; {}", "Abrupt End".red()),
+
+                Some(idx1) => {
+                    print!("{idx1:2x} ");
+
+                    let index = (*idx1 as usize) << 8 | (*idx0 as usize);
+                    let value = chunk.constants.get(index);
+                    match value {
+                        None => println!("; {}", "No Value".red()),
+                        Some(value) => println!("; {value}"),
+                    }
+                }
+            }
+        }
+    }
 
     offset + 4
 }
@@ -217,5 +245,24 @@ mod tests {
             .add_op(OpCode::Return, line + 5);
 
         disassemble(&chunk, "Check RLE");
+    }
+
+    #[test]
+    fn check_constant_long() {
+        let (mut chunk, line) = helper();
+
+        for i in 0..0x012c {
+            // 0..300
+            chunk.add_constant(Value::Num(i as f64));
+        }
+
+        chunk
+            .add_op(OpCode::ConstantLong, line)
+            .add_byte(0xaa, line)
+            .add_byte(0x02, line);
+
+        chunk.add_op(OpCode::Return, line);
+
+        disassemble(&chunk, "Op Constant Long");
     }
 }
