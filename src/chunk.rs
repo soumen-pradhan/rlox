@@ -109,101 +109,106 @@ impl Chunk {
     }
 }
 
-pub fn disassemble(chunk: &Chunk, name: &str) {
-    println!("== {name} ==");
+#[cfg(any(test, debug_assertions))]
+pub mod debug {
+    use super::*;
 
-    let mut offset = 0;
-    while let Some(off) = disassemble_instruction(chunk, offset) {
-        offset = off;
-    }
-}
+    pub fn disassemble(chunk: &Chunk, name: &str) {
+        println!("== {name} ==");
 
-pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> Option<usize> {
-    let instruction = *chunk.code.get(offset)?;
-
-    // Check if the line is the same, if yes print |
-    let (line, line_repeated) = chunk.offset_to_srcline(offset)?;
-    if line_repeated {
-        print!("{offset:04}    | : ");
-    } else {
-        print!("{offset:04} {line:4} : ");
+        let mut offset = 0;
+        while let Some(off) = disassemble_instruction(chunk, offset) {
+            offset = off;
+        }
     }
 
-    let ret = match OpCode::try_from(instruction) {
-        Err(_) => {
-            println!("{instruction:<8} ; {}", "Unknown Opcode".red());
-            offset + 1
+    pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> Option<usize> {
+        let instruction = *chunk.get_byte(offset)?;
+
+        // Check if the line is the same, if yes print |
+        let (line, line_repeated) = chunk.offset_to_srcline(offset)?;
+        if line_repeated {
+            print!("{offset:04}    | : ");
+        } else {
+            print!("{offset:04} {line:4} : ");
         }
 
-        Ok(opcode) => match opcode {
-            OpCode::Return => simple_op(opcode, offset),
-            OpCode::Constant => const_op(chunk, offset),
-            OpCode::ConstantLong => const_long_op(chunk, offset),
-        },
-    };
+        let ret = match OpCode::try_from(instruction) {
+            Err(_) => {
+                println!("{instruction:<8} ; {}", "Unknown Opcode".red());
+                offset + 1
+            }
 
-    Some(ret)
-}
+            Ok(opcode) => match opcode {
+                OpCode::Return => simple_op(opcode, offset),
+                OpCode::Constant => const_op(chunk, offset),
+                OpCode::ConstantLong => const_long_op(chunk, offset),
+            },
+        };
 
-fn simple_op(op: OpCode, offset: usize) -> usize {
-    println!("{op}");
-    offset + 1
-}
+        Some(ret)
+    }
 
-fn const_op(chunk: &Chunk, offset: usize) -> usize {
-    print!("{} ", OpCode::Constant);
+    fn simple_op(op: OpCode, offset: usize) -> usize {
+        println!("{op}");
+        offset + 1
+    }
 
-    let index = chunk.code.get(offset + 1);
-    match index {
-        None => println!("; {}", "Abrupt End".red()),
-        Some(index) => {
-            print!("{index:2x} ");
+    fn const_op(chunk: &Chunk, offset: usize) -> usize {
+        print!("{} ", OpCode::Constant);
 
-            let value = chunk.constants.get(*index as usize);
-            match value {
-                None => println!("; {}", "No Value".red()),
-                Some(value) => println!("; {value}"),
+        let index = chunk.get_byte(offset + 1);
+        match index {
+            None => println!("; {}", "Abrupt End".red()),
+            Some(index) => {
+                print!("{index:2x} ");
+
+                let value = chunk.get_constant(*index as usize);
+                match value {
+                    None => println!("; {}", "No Value".red()),
+                    Some(value) => println!("; {value}"),
+                }
             }
         }
+
+        offset + 2
     }
 
-    offset + 2
-}
+    fn const_long_op(chunk: &Chunk, offset: usize) -> usize {
+        print!("{} ", OpCode::ConstantLong);
 
-fn const_long_op(chunk: &Chunk, offset: usize) -> usize {
-    print!("{} ", OpCode::ConstantLong);
+        let idx0 = chunk.get_byte(offset + 1);
+        match idx0 {
+            None => println!("; {}", "Abrupt End".red()),
 
-    let idx0 = chunk.code.get(offset + 1);
-    match idx0 {
-        None => println!("; {}", "Abrupt End".red()),
+            Some(idx0) => {
+                print!("{idx0:2x} ");
 
-        Some(idx0) => {
-            print!("{idx0:2x} ");
+                let idx1 = chunk.get_byte(offset + 2);
+                match idx1 {
+                    None => println!("; {}", "Abrupt End".red()),
 
-            let idx1 = chunk.code.get(offset + 2);
-            match idx1 {
-                None => println!("; {}", "Abrupt End".red()),
+                    Some(idx1) => {
+                        print!("{idx1:2x} ");
 
-                Some(idx1) => {
-                    print!("{idx1:2x} ");
-
-                    let index = (*idx1 as usize) << 8 | (*idx0 as usize);
-                    let value = chunk.constants.get(index);
-                    match value {
-                        None => println!("; {}", "No Value".red()),
-                        Some(value) => println!("; {value}"),
+                        let index = (*idx1 as usize) << 8 | (*idx0 as usize);
+                        let value = chunk.get_constant(index);
+                        match value {
+                            None => println!("; {}", "No Value".red()),
+                            Some(value) => println!("; {value}"),
+                        }
                     }
                 }
             }
         }
-    }
 
-    offset + 4
+        offset + 4
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{debug::*, *};
 
     fn helper() -> (Chunk, usize) {
         (Chunk::new(), 666)
