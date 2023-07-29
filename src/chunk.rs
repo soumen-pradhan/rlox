@@ -8,21 +8,35 @@ use crate::value::{Value, ValuePool};
 #[repr(u8)]
 pub enum OpCode {
     Return = 0,
+
+    // load constant values
     Constant,
     ConstantLong,
+
+    // operators
     Negate,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
 }
 
 impl Display for OpCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let repr = match self {
             Self::Return => "ret",
-            Self::Constant => "const",
-            Self::ConstantLong => "constl",
+
+            Self::Constant => "ldc",      // load constant
+            Self::ConstantLong => "ldlc", // load long constant
+
             Self::Negate => "neg",
+            Self::Add => "add",
+            Self::Subtract => "sub",
+            Self::Multiply => "mul",
+            Self::Divide => "div",
         };
 
-        write!(f, "{:<8}", repr)
+        write!(f, "{:<5}", repr)
     }
 }
 
@@ -32,9 +46,16 @@ impl TryFrom<u8> for OpCode {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Return),
+
             1 => Ok(Self::Constant),
             2 => Ok(Self::ConstantLong),
+
             3 => Ok(Self::Negate),
+            4 => Ok(Self::Add),
+            5 => Ok(Self::Subtract),
+            6 => Ok(Self::Multiply),
+            7 => Ok(Self::Divide),
+
             _ => Err(()),
         }
     }
@@ -54,6 +75,12 @@ impl Chunk {
             code: Vec::new(),
             constants: ValuePool::new(),
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.lines.clear();
+        self.code.clear();
+        self.constants.clear();
     }
 
     pub fn add_byte(&mut self, byte: u8, line: usize) -> &mut Self {
@@ -152,9 +179,15 @@ pub mod debug {
 
             Ok(opcode) => match opcode {
                 OpCode::Return => simple_op(opcode, offset),
+
                 OpCode::Constant => const_op(chunk, offset),
                 OpCode::ConstantLong => const_long_op(chunk, offset),
-                OpCode::Negate => simple_op(opcode, offset),
+
+                OpCode::Negate
+                | OpCode::Add
+                | OpCode::Subtract
+                | OpCode::Multiply
+                | OpCode::Divide => simple_op(opcode, offset),
             },
         };
 

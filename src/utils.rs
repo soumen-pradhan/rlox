@@ -18,6 +18,10 @@ impl<T> Stack<T> {
     pub fn pop(&mut self) -> Option<T> {
         self.0.pop()
     }
+
+    pub fn top_mut(&mut self) -> Option<&mut T> {
+        self.0.last_mut()
+    }
 }
 
 #[cfg(any(test, debug_assertions))]
@@ -30,6 +34,6 @@ pub mod debug {
         for val in stack.0.iter() {
             print!("[ {val} ]");
         }
-        println!("");
+        println!();
     }
 }

@@ -58,6 +58,22 @@ impl<'a> VM<'a> {
             let byte = chunk.get_byte(self.ip)?;
             self.ip += 1;
 
+            let mut binary_op = |op: OpCode| -> Option<()> {
+                let Value::Num(op2) = self.stack.pop()?;
+                let Value::Num(op1) = self.stack.pop()?;
+
+                let res = match op {
+                    OpCode::Add => op1 + op2,
+                    OpCode::Subtract => op1 - op2,
+                    OpCode::Multiply => op1 * op2,
+                    OpCode::Divide => op1 / op2,
+                    _ => return None,
+                };
+
+                self.stack.push(Value::Num(res));
+                Some(())
+            };
+
             if let Ok(op) = OpCode::try_from(*byte) {
                 match op {
                     OpCode::Return => {
@@ -87,11 +103,19 @@ impl<'a> VM<'a> {
                     }
 
                     OpCode::Negate => {
-                        let val = match self.stack.pop()? {
-                            Value::Num(n) => Value::Num(-n),
-                        };
+                        // let val = match self.stack.pop()? {
+                        //     Value::Num(n) => Value::Num(-n),
+                        // };
 
-                        self.stack.push(val)
+                        // self.stack.push(val);
+
+                        match self.stack.top_mut()? {
+                            Value::Num(n) => *n = -*n,
+                        };
+                    }
+
+                    OpCode::Add | OpCode::Subtract | OpCode::Multiply | OpCode::Divide => {
+                        binary_op(op)?;
                     }
                 }
             }
@@ -107,6 +131,19 @@ mod tests {
 
     fn helper() -> (Chunk, usize) {
         (Chunk::new(), 200)
+    }
+
+    fn constant_add(chunk: &mut Chunk, val: Value, line: usize) {
+        let (b1, b2) = chunk.add_constant(val).unwrap();
+
+        if b2 == 0 {
+            chunk.add_op(OpCode::Constant, line).add_byte(b1, line);
+        } else {
+            chunk
+                .add_op(OpCode::ConstantLong, line)
+                .add_byte(b1, line)
+                .add_byte(b2, line);
+        }
     }
 
     #[test]
@@ -130,16 +167,62 @@ mod tests {
     fn negate() {
         let (mut chunk, line) = helper();
 
-        let (b1, b2) = chunk.add_constant(Value::Num(3.14)).unwrap();
+        constant_add(&mut chunk, Value::Num(3.14), line);
 
-        if b2 == 0 {
-            chunk.add_op(OpCode::Constant, line).add_byte(b1, line);
-        } else {
-            chunk
-                .add_op(OpCode::ConstantLong, line)
-                .add_byte(b1, line)
-                .add_byte(b2, line);
-        }
+        chunk
+            .add_op(OpCode::Negate, line)
+            .add_op(OpCode::Return, line);
+
+        let mut vm = VM::new();
+        vm.interpret(&chunk);
+    }
+
+    fn check_binary_operator(op: OpCode) {
+        let mut vm = VM::new();
+
+        let (mut chunk, line) = helper();
+
+        constant_add(&mut chunk, Value::Num(1.0), line);
+        constant_add(&mut chunk, Value::Num(2.0), line);
+
+        chunk.add_op(op, line).add_op(OpCode::Return, line);
+
+        vm.interpret(&chunk);
+        chunk.clear();
+    }
+
+    #[test]
+    fn add() {
+        check_binary_operator(OpCode::Add);
+    }
+
+    #[test]
+    fn subtract() {
+        check_binary_operator(OpCode::Subtract);
+    }
+
+    #[test]
+    fn multiply() {
+        check_binary_operator(OpCode::Multiply);
+    }
+
+    #[test]
+    fn divide() {
+        check_binary_operator(OpCode::Divide);
+    }
+
+    #[test]
+    fn expr() {
+        // (- (* (+ 1.2 3.4) 5.6))
+
+        let (mut chunk, line) = helper();
+
+        constant_add(&mut chunk, Value::Num(1.2), line);
+        constant_add(&mut chunk, Value::Num(3.4), line);
+        chunk.add_op(OpCode::Add, line);
+
+        constant_add(&mut chunk, Value::Num(5.6), line);
+        chunk.add_op(OpCode::Multiply, line);
 
         chunk
             .add_op(OpCode::Negate, line)

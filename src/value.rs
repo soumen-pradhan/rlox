@@ -10,7 +10,7 @@ pub enum Value {
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Num(n) => write!(f, "{n}")
+            Value::Num(n) => write!(f, "{n:.2}")
         }
     }
 }
@@ -22,6 +22,10 @@ pub struct ValuePool {
 impl ValuePool {
     pub fn new() -> Self {
         Self { values: Vec::new() }
+    }
+
+    pub fn clear(&mut self) {
+        self.values.clear();
     }
 
     pub fn add(&mut self, byte: Value) {
