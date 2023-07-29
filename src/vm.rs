@@ -1,10 +1,15 @@
 #![allow(dead_code)]
 
-use crate::chunk::{disassemble_instruction, Chunk, OpCode};
+use crate::{
+    chunk::{debug::disassemble_instruction, Chunk, OpCode},
+    utils::{debug::stack_trace, Stack},
+    value::Value,
+};
 
 pub struct VM<'a> {
     chunk: Option<&'a Chunk>,
     ip: usize, // instruction pointer
+    stack: Stack<Value>,
 }
 
 pub enum InterpretResult {
@@ -15,16 +20,18 @@ pub enum InterpretResult {
 
 impl<'a> VM<'a> {
     pub fn new() -> Self {
-        Self { chunk: None, ip: 0 }
+        Self {
+            chunk: None,
+            ip: 0,
+            stack: Stack::new(),
+        }
     }
 
     pub fn interpret(&mut self, chunk: &'a Chunk) -> InterpretResult {
         self.chunk = Some(chunk);
         self.ip = 0;
 
-        self.run();
-
-        InterpretResult::CompileError
+        self.run().unwrap_or(InterpretResult::RuntimeError)
     }
 
     fn run(&mut self) -> Option<InterpretResult> {
@@ -32,23 +39,28 @@ impl<'a> VM<'a> {
 
         loop {
             #[cfg(any(test, debug_assertions))]
-            disassemble_instruction(chunk, self.ip);
-            
+            {
+                stack_trace(&self.stack);
+                disassemble_instruction(chunk, self.ip);
+            }
+
             let byte = chunk.get_byte(self.ip)?;
             self.ip += 1;
 
             if let Ok(op) = OpCode::try_from(*byte) {
                 match op {
-                    OpCode::Return => return Some(InterpretResult::Ok),
+                    OpCode::Return => {
+                        let val = self.stack.pop()?;
+                        println!("{val}");
+                        return Some(InterpretResult::Ok);
+                    }
 
                     OpCode::Constant => {
                         let idx = chunk.get_byte(self.ip)?;
                         self.ip += 1;
 
-                        let value = chunk.get_constant(*idx as usize)?;
-
-                        println!("constant {value}");
-                        break;
+                        let val = chunk.get_constant(*idx as usize)?;
+                        self.stack.push(*val);
                     }
 
                     OpCode::ConstantLong => {
@@ -59,16 +71,12 @@ impl<'a> VM<'a> {
                         self.ip += 1;
 
                         let index = (*idx1 as usize) << 8 | (*idx0 as usize);
-                        let value = chunk.get_constant(index)?;
-
-                        println!("constant {value}");
-                        break;
+                        let val = chunk.get_constant(index)?;
+                        self.stack.push(*val);
                     }
                 }
             }
         }
-
-        Some(InterpretResult::Ok)
     }
 }
 
