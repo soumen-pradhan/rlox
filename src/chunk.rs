@@ -10,14 +10,16 @@ pub enum OpCode {
     Return = 0,
     Constant,
     ConstantLong,
+    Negate,
 }
 
 impl Display for OpCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let repr = match self {
-            OpCode::Return => "ret",
-            OpCode::Constant => "const",
-            OpCode::ConstantLong => "constl",
+            Self::Return => "ret",
+            Self::Constant => "const",
+            Self::ConstantLong => "constl",
+            Self::Negate => "neg",
         };
 
         write!(f, "{:<8}", repr)
@@ -32,6 +34,7 @@ impl TryFrom<u8> for OpCode {
             0 => Ok(Self::Return),
             1 => Ok(Self::Constant),
             2 => Ok(Self::ConstantLong),
+            3 => Ok(Self::Negate),
             _ => Err(()),
         }
     }
@@ -77,12 +80,20 @@ impl Chunk {
         self.add_byte(op as u8, line)
     }
 
-    pub fn add_constant(&mut self, val: Value) -> usize {
+    // instruction const can have max 2 operands (u8 << 8 | u8)
+    pub fn add_constant(&mut self, val: Value) -> Option<(u8, u8)> {
         let len = self.constants.len();
-        assert!(len < u16::MAX as usize);
+
+        if len >= u16::MAX as usize {
+            return None;
+        }
 
         self.constants.add(val);
-        len + 1
+
+        let byte1 = (len & 0xFF) as u8;
+        let byte2 = ((len >> 8) & 0xFF) as u8;
+
+        Some((byte1, byte2))
     }
 
     pub fn get_constant(&self, index: usize) -> Option<&Value> {
@@ -143,6 +154,7 @@ pub mod debug {
                 OpCode::Return => simple_op(opcode, offset),
                 OpCode::Constant => const_op(chunk, offset),
                 OpCode::ConstantLong => const_long_op(chunk, offset),
+                OpCode::Negate => simple_op(opcode, offset),
             },
         };
 
@@ -211,7 +223,7 @@ mod tests {
     use super::{debug::*, *};
 
     fn helper() -> (Chunk, usize) {
-        (Chunk::new(), 666)
+        (Chunk::new(), 100)
     }
 
     #[test]
