@@ -82,11 +82,11 @@ impl Add<Loc> for Type {
 }
 
 pub struct Lexer<'a> {
-    lines: &'a Vec<(usize, String)>,
+    lines: &'a Vec<String>,
 }
 
 impl<'a> Lexer<'a> {
-    pub fn new(lines: &'a Vec<(usize, String)>) -> Self {
+    pub fn new(lines: &'a Vec<String>) -> Self {
         Self { lines }
     }
 
@@ -94,8 +94,10 @@ impl<'a> Lexer<'a> {
         let symbols = self
             .lines
             .iter()
-            .flat_map(|(line_no, line): &(usize, String)| {
-                line.char_indices().map(|(col, c)| (Pos(*line_no, col), c))
+            .enumerate()
+            .flat_map(|(line_no, line)| {
+                line.char_indices()
+                    .map(move |(col, c)| (Pos(line_no, col), c))
             })
             .peekable();
 
@@ -110,9 +112,8 @@ impl<'a> Lexer<'a> {
 #[derive(Debug)]
 enum LexerErr {
     StrMultiline,
-    StrUnterminated
+    StrUnterminated,
 }
-
 struct LexerIterator<T: Iterator> {
     symbols: Peekable<T>,
     loc: Loc,
@@ -208,33 +209,6 @@ where
 
         false
     }
-
-    /*
-    private fun scanStr(): TokenType {
-        val str = buildString {
-            while (chars.hasNext()) {
-                val (char, pos) = chars.peek() ?: break
-
-                Log.end = pos
-
-                if (char == '"') {
-                    chars.next()
-                    break
-                }
-
-                if (pos.char == 1) append("\n")
-                append(chars.next().char)
-            }
-        }
-
-        return if (chars.hasNext()) {
-            STRING(str)
-        } else {
-            Log.err { msg = "Unterminated String" }
-            UNKNOWN
-        }
-    }
-    */
 
     fn scan_str(&mut self) -> Result<Type, LexerErr> {
         use LexerErr::*;
@@ -332,9 +306,9 @@ mod tests {
     #[test]
     fn check_primitives() {
         let lines = vec![
-            (0, "({  })".to_string()),
-            (1, ",.-+;*".to_string()),
-            (3, "! != = == < <= >  >=".to_string()),
+            "({  })".to_string(),
+            ",.-+;*".to_string(),
+            "! != = == < <= >  >=".to_string(),
         ];
 
         let expected = vec![
@@ -354,11 +328,11 @@ mod tests {
     #[test]
     fn check_comments() {
         let lines = vec![
-            (0, "/  /  // lorem".to_string()),
-            (1, "/* efoimekfmdm */".to_string()),
-            (3, "/* dsdsdsd /* dfdfawd */ wdadwadaw */".to_string()),
-            (4, "/* efoimekfmdm ".to_string()),
-            (5, "efoimekfmdm */".to_string()),
+            "/  /  // lorem".to_string(),
+            "/* efoimekfmdm */".to_string(),
+            "/* dsdsdsd /* dfdfawd */ wdadwadaw */".to_string(),
+            "/* efoimekfmdm ".to_string(),
+            "efoimekfmdm */".to_string(),
         ];
 
         let expected = vec![
@@ -375,13 +349,9 @@ mod tests {
 
     #[test]
     fn check_strings() {
-        let lines = vec![
-            (0, "\"lorem ipsum\"".to_string()),
-        ];
+        let lines = vec!["\"lorem ipsum\"".to_string()];
 
-        let expected = vec![
-            Str("lorem ipsum".to_string()), Eof,
-        ];
+        let expected = vec![Str("lorem ipsum".to_string()), Eof];
 
         let tokens = Lexer::new(&lines)
             .symbols()
