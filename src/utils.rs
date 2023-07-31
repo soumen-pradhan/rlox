@@ -26,7 +26,7 @@ impl<T> Stack<T> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Pos(pub usize, pub usize); // (line, col)
 
 impl std::fmt::Display for Pos {
@@ -49,7 +49,7 @@ impl AddAssign<usize> for Pos {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Loc {
     pub start: Pos,
     pub end: Pos,
