@@ -103,12 +103,6 @@ impl<'a> VM<'a> {
                     }
 
                     OpCode::Negate => {
-                        // let val = match self.stack.pop()? {
-                        //     Value::Num(n) => Value::Num(-n),
-                        // };
-
-                        // self.stack.push(val);
-
                         match self.stack.top_mut()? {
                             Value::Num(n) => *n = -*n,
                         };

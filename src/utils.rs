@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use std::ops::{Add, AddAssign};
+
 pub struct Stack<T>(Vec<T>);
 
 impl<T> Stack<T> {
@@ -23,6 +25,51 @@ impl<T> Stack<T> {
         self.0.last_mut()
     }
 }
+
+#[derive(Clone, Copy)]
+pub struct Pos(pub usize, pub usize); // (line, col)
+
+impl std::fmt::Display for Pos {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.0, self.1)
+    }
+}
+
+impl Add<usize> for Pos {
+    type Output = Pos;
+
+    fn add(self, col: usize) -> Self::Output {
+        Pos(self.0, self.1 + col)
+    }
+}
+
+impl AddAssign<usize> for Pos {
+    fn add_assign(&mut self, col: usize) {
+        self.1 += col;
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Loc {
+    pub start: Pos,
+    pub end: Pos,
+}
+
+impl Loc {
+    pub fn empty() -> Self {
+        Self {
+            start: Pos(0, 0),
+            end: Pos(0, 0),
+        }
+    }
+}
+
+impl std::fmt::Display for Loc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} -> {}", self.start, self.end)
+    }
+}
+
 
 #[cfg(any(test, debug_assertions))]
 pub mod debug {
