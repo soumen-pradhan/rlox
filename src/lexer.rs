@@ -1,13 +1,19 @@
 #![allow(dead_code)]
 
-use std::{iter::Peekable, ops::Add};
+use std::{
+    collections::HashMap,
+    iter::Peekable,
+    ops::Add,
+};
+
+use lazy_static::lazy_static;
 
 use crate::{
     error::Logger,
     utils::{Loc, Pos},
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Type {
     // Single-character tokens.
     LParen,
@@ -53,7 +59,6 @@ pub enum Type {
     KwThis,
     KwVar,
     KwWhile,
-
     KwTrue,
     KwFalse,
 
@@ -64,6 +69,27 @@ pub enum Type {
     Unknown,
 
     Eof,
+}
+
+lazy_static! {
+    static ref KEYWORDS: HashMap<&'static str, Type> = HashMap::from([
+        ("and", Type::KwAnd),
+        ("class", Type::KwClass),
+        ("else", Type::KwElse),
+        ("fun", Type::KwFun),
+        ("for", Type::KwFor),
+        ("if", Type::KwIf),
+        ("nil", Type::KwNil),
+        ("or", Type::KwOr),
+        ("print", Type::KwPrint),
+        ("return", Type::KwReturn),
+        ("super", Type::KwSuper),
+        ("this", Type::KwThis),
+        ("var", Type::KwVar),
+        ("while", Type::KwWhile),
+        ("true", Type::KwTrue),
+        ("false", Type::KwFalse),
+    ]);
 }
 
 #[derive(Debug)]
@@ -225,6 +251,8 @@ where
                         Unknown
                     }),
 
+                    'a'..='z' | 'A'..='Z' | '_' => self.scan_ident(sym),
+
                     '"' => self.scan_str().unwrap_or_else(|str_err| {
                         log!(str_err);
                         Unknown
@@ -269,8 +297,8 @@ where
         false
     }
 
-    fn scan_num(&mut self, c: char) -> Result<Type, LexerErr> {
-        let mut literal = String::from(c);
+    fn scan_num(&mut self, curr: char) -> Result<Type, LexerErr> {
+        let mut literal = String::from(curr);
 
         while let Some(PosChar(_pos, sym)) = self.symbols.peek() {
             let sym = *sym;
@@ -280,9 +308,7 @@ where
                 if sym == '.' {
                     // check if the dot is a decimal or a method call.
                     // If at least one digit exist after dot, it's a literal
-                    if let Some(PosChar(_pos, '0'..='9')) =
-                        self.peek_next()
-                    {
+                    if let Some(PosChar(_pos, '0'..='9')) = self.peek_next() {
                         literal.push('.');
                         self.consume(); // consume the '.'
 
@@ -313,6 +339,26 @@ where
             .map_err(|_| LexerErr::FloatInvalid)
     }
 
+    fn scan_ident(&mut self, curr: char) -> Type {
+        let mut literal = String::from(curr);
+
+        while let Some(PosChar(_pos, sym)) = self.peek() {
+            let sym = *sym;
+            if !sym.is_ascii_alphanumeric() && sym != '_' {
+                break;
+            }
+            literal.push(sym);
+            self.consume();
+        }
+
+        if let Some(ty) = KEYWORDS.get(literal.as_str()) {
+            ty.clone()
+        } else {
+            Type::Ident(literal)
+        }
+    }
+
+    // TODO Add string interpolation
     fn scan_str(&mut self) -> Result<Type, LexerErr> {
         let mut literal = String::new();
 
@@ -507,13 +553,15 @@ mod tests {
         let expected = vec![
             Num(2.0),
             Whitespace,
-            Unknown, Dot,
+            Unknown,
+            Dot,
             Whitespace,
             Num(3.0),
             Whitespace,
             Num(3.14),
             Whitespace,
-            Unknown, Dot,
+            Unknown,
+            Dot,
             Whitespace,
             Eof,
         ];
@@ -526,6 +574,44 @@ mod tests {
             .collect::<Vec<_>>();
 
         println!("{tokens:?}");
+
+        assert_eq!(expected, tokens);
+    }
+
+    #[test]
+    fn check_keywords() {
+        let lines = vec![
+            "fun main () {\n".to_string(),
+            "    print 3;\n".to_string(),
+            "}\n".to_string(),
+        ];
+
+        let expected = vec![
+            KwFun,
+            Whitespace,
+            Ident("main".to_string()),
+            Whitespace,
+            LParen,
+            RParen,
+            Whitespace,
+            LBrace,
+            Whitespace,
+            KwPrint,
+            Whitespace,
+            Num(3.0),
+            Semicolon,
+            Whitespace,
+            RBrace,
+            Whitespace,
+            Eof,
+        ];
+
+        let logger = ErrorLogger { lines: &lines };
+
+        let tokens = Lexer::new(&lines, &logger)
+            .symbols()
+            .map(|tok| tok.ty)
+            .collect::<Vec<_>>();
 
         assert_eq!(expected, tokens);
     }
