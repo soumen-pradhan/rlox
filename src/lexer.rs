@@ -1,15 +1,11 @@
 #![allow(dead_code)]
 
-use std::{
-    collections::HashMap,
-    iter::Peekable,
-    ops::Add,
-};
+use std::{collections::HashMap, iter::Peekable, ops::Add};
 
 use lazy_static::lazy_static;
 
 use crate::{
-    error::Logger,
+    error::{ErrorLogger, Logger},
     utils::{Loc, Pos},
 };
 
@@ -98,37 +94,28 @@ pub struct Token {
     loc: Loc,
 }
 
-impl Token {
-    fn new(ty: Type, loc: Loc) -> Self {
-        Self { ty, loc }
-    }
-}
-
 impl Add<Loc> for Type {
     type Output = Token;
 
     fn add(self, loc: Loc) -> Self::Output {
-        Token::new(self, loc)
+        Token { ty: self, loc }
     }
 }
 
 #[derive(Clone)]
 pub struct PosChar(Pos, char);
 
-pub struct Lexer<'a, L> {
+pub struct Lexer<'a> {
     lines: &'a Vec<String>,
-    logger: &'a L,
+    logger: &'a ErrorLogger<'a>,
 }
 
-impl<'a, L> Lexer<'a, L>
-where
-    L: Logger + Clone,
-{
-    pub fn new(lines: &'a Vec<String>, logger: &'a L) -> Self {
+impl<'a> Lexer<'a> {
+    pub fn new(lines: &'a Vec<String>, logger: &'a ErrorLogger<'a>) -> Self {
         Self { lines, logger }
     }
 
-    pub fn symbols(&self) -> LexerIterator<impl Iterator<Item = PosChar> + 'a + Clone, L> {
+    pub fn tokens(&self) -> impl Iterator<Item = Token> + 'a {
         let symbols = self
             .lines
             .iter()
@@ -166,33 +153,16 @@ impl LexerErr {
 }
 
 #[derive(Clone)]
-pub struct LexerIterator<'a, I: Iterator<Item = PosChar>, L> {
+struct LexerIterator<'a, I: Iterator<Item = PosChar>> {
     symbols: Peekable<I>,
     loc: Loc,
     done: bool,
-    logger: &'a L,
+    logger: &'a ErrorLogger<'a>,
 }
 
-impl<'a, I, L> LexerIterator<'a, I, L>
+impl<'a, I> Iterator for LexerIterator<'a, I>
 where
     I: Iterator<Item = PosChar> + Clone,
-    L: Logger + Clone,
-{
-    fn peek(&mut self) -> Option<&I::Item> {
-        self.symbols.peek()
-    }
-
-    fn peek_next(&mut self) -> Option<I::Item> {
-        let mut copy = self.clone();
-        copy.next();
-        copy.peek().cloned()
-    }
-}
-
-impl<'a, I, L> Iterator for LexerIterator<'a, I, L>
-where
-    I: Iterator<Item = PosChar> + Clone,
-    L: Logger + Clone,
 {
     type Item = Token;
 
@@ -271,11 +241,14 @@ where
     }
 }
 
-impl<'a, I, L> LexerIterator<'a, I, L>
+impl<'a, I> LexerIterator<'a, I>
 where
-    I: Iterator<Item = PosChar> + Clone,
-    L: Logger + Clone,
+    I: Iterator<Item = PosChar>,
 {
+    fn peek(&mut self) -> Option<&I::Item> {
+        self.symbols.peek()
+    }
+
     fn consume(&mut self) -> Option<PosChar> {
         let ret = self.symbols.next();
 
@@ -295,48 +268,6 @@ where
         }
 
         false
-    }
-
-    fn scan_num(&mut self, curr: char) -> Result<Type, LexerErr> {
-        let mut literal = String::from(curr);
-
-        while let Some(PosChar(_pos, sym)) = self.symbols.peek() {
-            let sym = *sym;
-
-            // check if fractional part exists
-            if !sym.is_ascii_digit() {
-                if sym == '.' {
-                    // check if the dot is a decimal or a method call.
-                    // If at least one digit exist after dot, it's a literal
-                    if let Some(PosChar(_pos, '0'..='9')) = self.peek_next() {
-                        literal.push('.');
-                        self.consume(); // consume the '.'
-
-                        while let Some(PosChar(_pos, sym)) = self.symbols.peek() {
-                            if !sym.is_ascii_digit() {
-                                break;
-                            }
-
-                            literal.push(*sym);
-                            self.consume();
-                        }
-                    } else {
-                        // dangling dot. method call or float literal ??
-                        return Err(LexerErr::DanglingPoint);
-                    }
-                }
-
-                break;
-            }
-
-            literal.push(sym);
-            self.consume();
-        }
-
-        literal
-            .parse::<f64>()
-            .map(Type::Num)
-            .map_err(|_| LexerErr::FloatInvalid)
     }
 
     fn scan_ident(&mut self, curr: char) -> Type {
@@ -449,6 +380,59 @@ where
     }
 }
 
+impl<'a, I> LexerIterator<'a, I>
+where
+    I: Iterator<Item = PosChar> + Clone,
+{
+    fn peek_next(&mut self) -> Option<I::Item> {
+        let mut copy = self.clone();
+        copy.next();
+        copy.peek().cloned()
+    }
+
+    fn scan_num(&mut self, curr: char) -> Result<Type, LexerErr> {
+        let mut literal = String::from(curr);
+
+        while let Some(PosChar(_pos, sym)) = self.symbols.peek() {
+            let sym = *sym;
+
+            // check if fractional part exists
+            if !sym.is_ascii_digit() {
+                if sym == '.' {
+                    // check if the dot is a decimal or a method call.
+                    // If at least one digit exist after dot, it's a literal
+                    if let Some(PosChar(_pos, '0'..='9')) = self.peek_next() {
+                        literal.push('.');
+                        self.consume(); // consume the '.'
+
+                        while let Some(PosChar(_pos, sym)) = self.symbols.peek() {
+                            if !sym.is_ascii_digit() {
+                                break;
+                            }
+
+                            literal.push(*sym);
+                            self.consume();
+                        }
+                    } else {
+                        // dangling dot. method call or float literal ??
+                        return Err(LexerErr::DanglingPoint);
+                    }
+                }
+
+                break;
+            }
+
+            literal.push(sym);
+            self.consume();
+        }
+
+        literal
+            .parse::<f64>()
+            .map(Type::Num)
+            .map_err(|_| LexerErr::FloatInvalid)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::error::ErrorLogger;
@@ -473,7 +457,7 @@ mod tests {
         let logger = ErrorLogger { lines: &lines };
 
         let tokens = Lexer::new(&lines, &logger)
-            .symbols()
+            .tokens()
             .map(|tok| tok.ty)
             .collect::<Vec<_>>();
 
@@ -498,7 +482,7 @@ mod tests {
         let logger = ErrorLogger { lines: &lines };
 
         let tokens = Lexer::new(&lines, &logger)
-            .symbols()
+            .tokens()
             .map(|tok| tok.ty)
             .collect::<Vec<_>>();
 
@@ -514,7 +498,7 @@ mod tests {
         let logger = ErrorLogger { lines: &lines };
 
         let tokens = Lexer::new(&lines, &logger)
-            .symbols()
+            .tokens()
             .map(|tok| tok.ty)
             .collect::<Vec<_>>();
 
@@ -539,7 +523,7 @@ mod tests {
         let logger = ErrorLogger { lines: &lines };
 
         let tokens = Lexer::new(&lines, &logger)
-            .symbols()
+            .tokens()
             .map(|tok| tok.ty)
             .collect::<Vec<_>>();
 
@@ -569,7 +553,7 @@ mod tests {
         let logger = ErrorLogger { lines: &lines };
 
         let tokens = Lexer::new(&lines, &logger)
-            .symbols()
+            .tokens()
             .map(|tok| tok.ty)
             .collect::<Vec<_>>();
 
@@ -609,7 +593,7 @@ mod tests {
         let logger = ErrorLogger { lines: &lines };
 
         let tokens = Lexer::new(&lines, &logger)
-            .symbols()
+            .tokens()
             .map(|tok| tok.ty)
             .collect::<Vec<_>>();
 

@@ -6,7 +6,6 @@ pub trait Logger {
     fn err(&self, loc: Loc, msg: &str);
 }
 
-#[derive(Clone)]
 pub struct ErrorLogger<'a> {
     pub lines: &'a Vec<String>,
 }
