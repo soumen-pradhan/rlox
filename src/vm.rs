@@ -15,7 +15,7 @@ pub struct VM<'a> {
 }
 
 pub enum VMResult {
-    Ok,
+    VmOk,
     CompileError,
     RuntimeError,
 }
@@ -79,7 +79,7 @@ impl<'a> VM<'a> {
                     OpCode::Return => {
                         let val = self.stack.pop()?;
                         println!("{val}");
-                        return Some(VMResult::Ok);
+                        return Some(VMResult::VmOk);
                     }
 
                     OpCode::Constant => {
@@ -119,25 +119,12 @@ impl<'a> VM<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::value::Value;
+    use crate::{value::Value, chunk::constant_add_store};
 
     use super::*;
 
     fn helper() -> (Chunk, usize) {
         (Chunk::new(), 200)
-    }
-
-    fn constant_add(chunk: &mut Chunk, val: Value, line: usize) {
-        let (b1, b2) = chunk.add_constant(val).unwrap();
-
-        if b2 == 0 {
-            chunk.add_op(OpCode::Constant, line).add_byte(b1, line);
-        } else {
-            chunk
-                .add_op(OpCode::ConstantLong, line)
-                .add_byte(b1, line)
-                .add_byte(b2, line);
-        }
     }
 
     #[test]
@@ -161,7 +148,7 @@ mod tests {
     fn negate() {
         let (mut chunk, line) = helper();
 
-        constant_add(&mut chunk, Value::Num(3.14), line);
+        constant_add_store(&mut chunk, Value::Num(3.14), line);
 
         chunk
             .add_op(OpCode::Negate, line)
@@ -176,8 +163,8 @@ mod tests {
 
         let (mut chunk, line) = helper();
 
-        constant_add(&mut chunk, Value::Num(1.0), line);
-        constant_add(&mut chunk, Value::Num(2.0), line);
+        constant_add_store(&mut chunk, Value::Num(1.0), line);
+        constant_add_store(&mut chunk, Value::Num(2.0), line);
 
         chunk.add_op(op, line).add_op(OpCode::Return, line);
 
@@ -211,11 +198,11 @@ mod tests {
 
         let (mut chunk, line) = helper();
 
-        constant_add(&mut chunk, Value::Num(1.2), line);
-        constant_add(&mut chunk, Value::Num(3.4), line);
+        constant_add_store(&mut chunk, Value::Num(1.2), line);
+        constant_add_store(&mut chunk, Value::Num(3.4), line);
         chunk.add_op(OpCode::Add, line);
 
-        constant_add(&mut chunk, Value::Num(5.6), line);
+        constant_add_store(&mut chunk, Value::Num(5.6), line);
         chunk.add_op(OpCode::Multiply, line);
 
         chunk

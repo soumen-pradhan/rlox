@@ -147,6 +147,21 @@ impl Chunk {
     }
 }
 
+pub fn constant_add_store(chunk: &mut Chunk, val: Value, line: usize) -> Option<()> {
+    let (b1, b2) = chunk.add_constant(val)?;
+
+    if b2 == 0 {
+        chunk.add_op(OpCode::Constant, line).add_byte(b1, line);
+    } else {
+        chunk
+            .add_op(OpCode::ConstantLong, line)
+            .add_byte(b1, line)
+            .add_byte(b2, line);
+    }
+
+    Some(())
+}
+
 #[cfg(any(test, debug_assertions))]
 pub mod debug {
     use super::*;
