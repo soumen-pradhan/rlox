@@ -7,10 +7,16 @@ pub enum Value {
     Num(f64),
 }
 
+const EPSILON: f64 = 1e-200;
+
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Num(n) => write!(f, "{n:.2}")
+            Value::Num(n) => write!(
+                f,
+                "{n:.precision$}",
+                precision = if n.fract() > EPSILON { 2 } else { 0 }
+            ),
         }
     }
 }
@@ -38,5 +44,23 @@ impl ValuePool {
 
     pub fn get(&self, index: usize) -> Option<&Value> {
         self.values.get(index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // use super::*;
+
+    #[test]
+    fn check_fractional_printing() {
+        let n: f64 = 3.14;
+        let n2: f64 = 3.0;
+
+        println!("{n:.width$}", width = if n.fract() > 1e-6 { 2 } else { 0 });
+        println!(
+            "{n2:.width$}",
+            width = if n2.fract() > 1e-6 { 2 } else { 0 }
+        );
+        println!("{}", f64::MIN_POSITIVE);
     }
 }
