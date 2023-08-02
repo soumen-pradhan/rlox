@@ -70,6 +70,16 @@ impl std::fmt::Display for Loc {
     }
 }
 
+// try-block = "0.1.0"
+#[macro_export]
+macro_rules! try_block {
+    { $($token:tt)* } => {{
+        let l = || {
+            $($token)*
+        };
+        l()
+    }}
+}
 
 #[cfg(any(test, debug_assertions))]
 pub mod debug {
