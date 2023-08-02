@@ -5,7 +5,7 @@ use std::{collections::HashMap, iter::Peekable, ops::Add};
 use lazy_static::lazy_static;
 
 use crate::{
-    error::{ErrorLogger, Logger},
+    error::prelude::*,
     utils::{Loc, Pos},
 };
 
@@ -88,10 +88,10 @@ lazy_static! {
     ]);
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Token {
-    ty: Type,
-    loc: Loc,
+    pub ty: Type,
+    pub loc: Loc,
 }
 
 impl Add<Loc> for Type {
@@ -107,12 +107,11 @@ pub struct PosChar(Pos, char);
 
 pub struct Lexer<'a> {
     lines: &'a Vec<String>,
-    logger: &'a ErrorLogger<'a>,
 }
 
 impl<'a> Lexer<'a> {
-    pub fn new(lines: &'a Vec<String>, logger: &'a ErrorLogger<'a>) -> Self {
-        Self { lines, logger }
+    pub fn new(lines: &'a Vec<String>) -> Self {
+        Self { lines }
     }
 
     pub fn tokens(&self) -> impl Iterator<Item = Token> + 'a {
@@ -130,7 +129,6 @@ impl<'a> Lexer<'a> {
             symbols,
             loc: Loc::empty(),
             done: false,
-            logger: self.logger,
         }
     }
 }
@@ -153,14 +151,13 @@ impl LexerErr {
 }
 
 #[derive(Clone)]
-struct LexerIterator<'a, I: Iterator<Item = PosChar>> {
+struct LexerIterator<I: Iterator<Item = PosChar>> {
     symbols: Peekable<I>,
     loc: Loc,
     done: bool,
-    logger: &'a ErrorLogger<'a>,
 }
 
-impl<'a, I> Iterator for LexerIterator<'a, I>
+impl<I> Iterator for LexerIterator<I>
 where
     I: Iterator<Item = PosChar> + Clone,
 {
@@ -178,12 +175,6 @@ where
         macro_rules! match_consume {
             ($sym:expr, $left:expr, $right:expr) => {
                 if self.match_consume($sym) { $left } else { $right }
-            };
-        }
-
-        macro_rules! log {
-            ($lexer_error:expr) => {
-                self.logger.err(self.loc, $lexer_error.show())
             };
         }
 
@@ -217,14 +208,14 @@ where
                     '>' => match_consume!('=', GreaterEq, Greater),
 
                     '0'..='9' => self.scan_num(sym).unwrap_or_else(|num_err| {
-                        log!(num_err);
+                        log!(self.loc, num_err.show());
                         Unknown
                     }),
 
                     'a'..='z' | 'A'..='Z' | '_' => self.scan_ident(sym),
 
                     '"' => self.scan_str().unwrap_or_else(|str_err| {
-                        log!(str_err);
+                        log!(self.loc, str_err.show());
                         Unknown
                     }),
 
@@ -241,7 +232,7 @@ where
     }
 }
 
-impl<'a, I> LexerIterator<'a, I>
+impl<I> LexerIterator<I>
 where
     I: Iterator<Item = PosChar>,
 {
@@ -380,7 +371,7 @@ where
     }
 }
 
-impl<'a, I> LexerIterator<'a, I>
+impl<I> LexerIterator<I>
 where
     I: Iterator<Item = PosChar> + Clone,
 {
@@ -435,8 +426,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::error::ErrorLogger;
+    #![allow(unused_unsafe)]
 
+    use crate::error::prelude::*;
     use super::{Type::*, *};
 
     #[test]
@@ -454,9 +446,7 @@ mod tests {
             Whitespace, Eof,
         ];
 
-        let logger = ErrorLogger { lines: &lines };
-
-        let tokens = Lexer::new(&lines, &logger)
+        let tokens = Lexer::new(&lines)
             .tokens()
             .map(|tok| tok.ty)
             .collect::<Vec<_>>();
@@ -479,14 +469,16 @@ mod tests {
             Comment, Whitespace, Comment, Whitespace, Eof,
         ];
 
-        let logger = ErrorLogger { lines: &lines };
+        log_context! {
+            @lines;
 
-        let tokens = Lexer::new(&lines, &logger)
-            .tokens()
-            .map(|tok| tok.ty)
-            .collect::<Vec<_>>();
+            let tokens = Lexer::new(&lines)
+                .tokens()
+                .map(|tok| tok.ty)
+                .collect::<Vec<_>>();
 
-        assert_eq!(expected, tokens);
+            assert_eq!(expected, tokens);
+        }
     }
 
     #[test]
@@ -495,14 +487,18 @@ mod tests {
 
         let expected = vec![Str("lorem ipsum".to_string()), Whitespace, Eof];
 
-        let logger = ErrorLogger { lines: &lines };
+        log_context! {
+            @lines;
 
-        let tokens = Lexer::new(&lines, &logger)
-            .tokens()
-            .map(|tok| tok.ty)
-            .collect::<Vec<_>>();
+            let tokens = Lexer::new(&lines)
+                .tokens()
+                .map(|tok| tok.ty)
+                .collect::<Vec<_>>();
 
-        assert_eq!(expected, tokens);
+            assert_eq!(expected, tokens);
+
+        }
+
     }
 
     #[test]
@@ -520,14 +516,17 @@ mod tests {
             Eof,
         ];
 
-        let logger = ErrorLogger { lines: &lines };
+        log_context! {
+            @lines;
 
-        let tokens = Lexer::new(&lines, &logger)
-            .tokens()
-            .map(|tok| tok.ty)
-            .collect::<Vec<_>>();
+            let tokens = Lexer::new(&lines)
+                .tokens()
+                .map(|tok| tok.ty)
+                .collect::<Vec<_>>();
 
-        assert_eq!(expected, tokens);
+            assert_eq!(expected, tokens);
+        }
+
     }
 
     #[test]
@@ -550,16 +549,19 @@ mod tests {
             Eof,
         ];
 
-        let logger = ErrorLogger { lines: &lines };
+        log_context! {
+            @lines;
 
-        let tokens = Lexer::new(&lines, &logger)
-            .tokens()
-            .map(|tok| tok.ty)
-            .collect::<Vec<_>>();
+            let tokens = Lexer::new(&lines)
+                .tokens()
+                .map(|tok| tok.ty)
+                .collect::<Vec<_>>();
 
-        println!("{tokens:?}");
+            println!("{tokens:?}");
 
-        assert_eq!(expected, tokens);
+            assert_eq!(expected, tokens);
+        }
+
     }
 
     #[test]
@@ -590,13 +592,16 @@ mod tests {
             Eof,
         ];
 
-        let logger = ErrorLogger { lines: &lines };
+        log_context! {
+            @lines;
 
-        let tokens = Lexer::new(&lines, &logger)
-            .tokens()
-            .map(|tok| tok.ty)
-            .collect::<Vec<_>>();
+            let tokens = Lexer::new(&lines)
+                .tokens()
+                .map(|tok| tok.ty)
+                .collect::<Vec<_>>();
 
-        assert_eq!(expected, tokens);
+            assert_eq!(expected, tokens);
+        }
+
     }
 }

@@ -1,20 +1,56 @@
-#![allow(dead_code)]
+#![allow(dead_code, unused_unsafe)]
 
 use crate::utils::Loc;
+
+pub mod prelude {
+    pub use super::{ErrorLogger, Logger, LOGGER};
+    pub use crate::{log, log_context};
+}
 
 pub trait Logger {
     fn err(&self, loc: Loc, msg: &str);
 }
 
 pub struct ErrorLogger<'a> {
-    pub lines: &'a Vec<String>,
+    pub lines: Option<&'a Vec<String>>,
+}
+
+pub static mut LOGGER: ErrorLogger<'static> = ErrorLogger { lines: None };
+
+#[macro_export]
+macro_rules! log_context {
+    { @ $lines:expr; $($token:tt)* } => {
+        unsafe {
+            // Get a reference with 'static lifetime, extending the lifetime of `lines`
+            let lines_static: &'static Vec<String> = std::mem::transmute(&$lines);
+            LOGGER.lines = Some(lines_static);
+
+            $($token)*
+
+            // Reset LOGGER.lines to None at the end of the block
+            LOGGER.lines = None;
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! log {
+    // TODO expr to specific types
+    ($loc:expr, $msg:expr) => {
+        unsafe {
+            LOGGER.err($loc, $msg);
+        }
+    };
 }
 
 impl<'a> ErrorLogger<'a> {
     fn get_line(&self, n: usize) -> &str {
-        match self.lines.get(n) {
+        match self.lines {
             None => "",
-            Some(line) => line.trim_end_matches('\n'),
+            Some(lines) => match lines.get(n) {
+                None => "",
+                Some(line) => line.trim_end_matches('\n'),
+            },
         }
     }
 }
@@ -81,6 +117,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn check() {
+        let lines = vec!["Lorem ipsum".to_string()];
+
+        log_context! {
+            @lines;
+
+            let loc = Loc {
+                start: Pos(0, 6),
+                end: Pos(0, 10),
+            };
+
+            let msg = "Something went wrong";
+
+            log!(loc, msg);
+        }
+    }
+
+    #[test]
     fn width_of_numbers() {
         let numbers: Vec<usize> = vec![0, 1, 2, 20, 102, 99999];
         let expected = vec![1, 1, 1, 2, 3, 5];
@@ -98,16 +152,18 @@ mod tests {
             "Sed eu risus.\n".to_string(),
         ];
 
-        let log = ErrorLogger { lines: &lines };
+        log_context! {
+            @lines;
 
-        let loc = Loc {
-            start: Pos(0, 6),
-            end: Pos(0, 11),
-        };
+            let loc = Loc {
+                start: Pos(0, 6),
+                end: Pos(0, 11),
+            };
 
-        let msg = "Something went wrong";
+            let msg = "Something went wrong";
 
-        log.err(loc, msg);
+            log!(loc, msg);
+        }
     }
 
     #[test]
@@ -118,15 +174,17 @@ mod tests {
             "Sed eu risus.\n".to_string(),
         ];
 
-        let log = ErrorLogger { lines: &lines };
+        log_context! {
+            @lines;
 
-        let loc = Loc {
-            start: Pos(0, 0),
-            end: Pos(2, 3),
-        };
+            let loc = Loc {
+                start: Pos(0, 0),
+                end: Pos(2, 3),
+            };
 
-        let msg = "Something went wrong";
+            let msg = "Something went wrong";
 
-        log.err(loc, msg);
+            log!(loc, msg);
+        }
     }
 }

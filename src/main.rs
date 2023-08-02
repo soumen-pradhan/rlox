@@ -3,10 +3,10 @@ use std::{
     io::{BufRead, BufReader},
 };
 
-use error::ErrorLogger;
-use lexer::Lexer;
+use crate::{compiler::run_code, error::prelude::*};
 
 mod chunk;
+mod compiler;
 mod error;
 mod lexer;
 mod utils;
@@ -22,9 +22,8 @@ fn main() {
         .filter_map(|line| line.ok().map(|l| l + "\n"))
         .collect::<Vec<_>>();
 
-    let logger = ErrorLogger { lines: &lines };
-
-    for token in Lexer::new(&lines, &logger).symbols() {
-        println!("{token:?}");
+    log_context! {
+        @lines;
+        run_code(&lines);
     }
 }
