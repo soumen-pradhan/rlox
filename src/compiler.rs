@@ -3,14 +3,15 @@
 use std::{cmp::min, iter::Peekable, ops::Add};
 
 use crate::{
-    chunk::{constant_add_store, debug::disassemble, Chunk, OpCode},
+    chunk::{constant_add_store, Chunk, OpCode},
     error::prelude::*,
     lexer::{
         Lexer, Token,
         Type::{self, *},
     },
     utils::Loc,
-    value::Value, vm::VM,
+    value::Value,
+    vm::VM,
 };
 
 use debug::stack_trace;
@@ -22,13 +23,10 @@ pub fn run_code(lines: &Vec<String>) {
         .filter(|s| s.ty != Whitespace)
         .peekable();
 
-    let chunk = parse(tokens).unwrap();
-
-    #[cfg(any(test, debug_assertions))]
-    disassemble(&chunk, "simple math");
+    let chunk = parse(tokens).unwrap_or_else(|_| Chunk::new());
 
     let mut vm = VM::new();
-    vm.interpret(&chunk);
+    let _res = vm.interpret(&chunk);
 }
 
 #[derive(Debug, PartialEq, PartialOrd)]
@@ -66,12 +64,23 @@ pub struct Parser<I: Iterator> {
     panic: bool,
 }
 
+#[derive(Debug)]
+enum ParserErr {
+    NoMoreTokens,
+    UnexpectedEof,
+    UnknownToken,
+    IncorrectToken,
+    NotPrefix,
+    NotInfix,
+    ValuePoolOverflow,
+}
+
 // TODO write this as a macro
 // parse! {
 //     advance
 //     expr
 // }
-fn parse<I>(tokens: Peekable<I>) -> Option<Chunk>
+fn parse<I>(tokens: Peekable<I>) -> Result<Chunk, ParserErr>
 where
     I: Iterator<Item = Token>,
 {
@@ -82,10 +91,19 @@ where
         .consume(Eof, "Expected end of expression")?
         .ret()?;
 
-    parser.done()
+    Ok(parser.chunk)
 }
 
-type ParserFn<I> = fn(&mut Parser<I>) -> Option<&mut Parser<I>>;
+impl<I> Parser<I>
+where
+    I: Iterator<Item = Token>,
+{
+    fn curr(&mut self) -> Result<&Token, ParserErr> {
+        self.tokens.peek().ok_or(ParserErr::NoMoreTokens)
+    }
+}
+
+type ParserFn<I> = fn(&mut Parser<I>) -> Result<&mut Parser<I>, ParserErr>;
 
 impl<I> Parser<I>
 where
@@ -102,29 +120,29 @@ where
     }
 
     // Error due to | no more tokens | Unknown token (Lexer error)
-    fn advance(&mut self) -> Option<&mut Self> {
+    fn advance(&mut self) -> Result<&mut Self, ParserErr> {
         #[cfg(any(test, debug_assertions))]
         stack_trace(self, "advance");
 
-        self.prev = match self.tokens.next()? {
-            t_err if t_err.ty == Unknown => return None,
+        self.prev = match self.tokens.next().ok_or(ParserErr::NoMoreTokens)? {
+            t_err if t_err.ty == Unknown => return Err(ParserErr::UnknownToken),
             t => t,
         };
 
-        Some(self)
+        Ok(self)
     }
 
     // Error due to | no more tokens | incorrect type
-    fn consume(&mut self, ty: Type, err_msg: &str) -> Option<&mut Self> {
+    fn consume(&mut self, ty: Type, err_msg: &str) -> Result<&mut Self, ParserErr> {
         #[cfg(any(test, debug_assertions))]
         stack_trace(self, "consume");
 
-        match self.tokens.peek()? {
+        match self.curr()? {
             t if t.ty == ty => self.advance(),
 
             tok_err => {
                 log!(tok_err.loc, err_msg);
-                None
+                Err(ParserErr::IncorrectToken)
             }
         }
     }
@@ -133,19 +151,65 @@ where
     // (prefix, infix, precedence)
     fn get_rule(ty: &Type) -> (Option<ParserFn<I>>, Option<ParserFn<I>>, Precedence) {
         match ty {
-            LParen    => (Some(Self::grouping), None,               Precedence::Not),
-            Plus      => (None,                 Some(Self::binary), Precedence::Term),
-            Minus     => (Some(Self::unary),    Some(Self::binary), Precedence::Term),
-            Semicolon => (None,                 None,               Precedence::Not),
-            Slash     => (None,                 Some(Self::binary), Precedence::Factor),
-            Star      => (None,                 Some(Self::binary), Precedence::Factor),
-            Num(_)    => (Some(Self::number),      None,               Precedence::Not),
-            _         => (None,                 None,               Precedence::Not)
+            // Single-character tokens.
+            LParen => (Some(Self::grouping), None, Precedence::Not),
+            RParen => (None, None, Precedence::Not),
+            LBrace => (None, None, Precedence::Not),
+            RBrace => (None, None, Precedence::Not),
+
+            Comma     => (None, None, Precedence::Not),
+            Dot       => (None, None, Precedence::Not),
+            Minus     => (Some(Self::unary), Some(Self::binary), Precedence::Term),
+            Plus      => (None, Some(Self::binary), Precedence::Term),
+            Semicolon => (None, None, Precedence::Not),
+            Slash     => (None, Some(Self::binary), Precedence::Factor),
+            Star      => (None, Some(Self::binary), Precedence::Factor),
+
+            // One or two character tokens.
+            Bang      => (Some(Self::unary), None, Precedence::Not),
+            BangEq    => (None, Some(Self::binary), Precedence::Eq),
+            Eq        => (None, None, Precedence::Not),
+            EqEq      => (None, Some(Self::binary), Precedence::Eq),
+            Greater   => (None, Some(Self::binary), Precedence::Cmp),
+            GreaterEq => (None, Some(Self::binary), Precedence::Cmp),
+            Less      => (None, Some(Self::binary), Precedence::Cmp),
+            LessEq    => (None, Some(Self::binary), Precedence::Cmp),
+
+            // Literals.
+            Ident(_) => (None, None, Precedence::Not),
+            Str(_)   => (None, None, Precedence::Not),
+            Num(_)   => (Some(Self::number), None, Precedence::Not),
+
+            // Keywords.
+            KwAnd    => (None, None, Precedence::Not),
+            KwClass  => (None, None, Precedence::Not),
+            KwElse   => (None, None, Precedence::Not),
+            KwFun    => (None, None, Precedence::Not),
+            KwFor    => (None, None, Precedence::Not),
+            KwIf     => (None, None, Precedence::Not),
+            KwNil    => (Some(Self::literal), None, Precedence::Not),
+            KwOr     => (None, None, Precedence::Not),
+            KwPrint  => (None, None, Precedence::Not),
+            KwReturn => (None, None, Precedence::Not),
+            KwSuper  => (None, None, Precedence::Not),
+            KwThis   => (None, None, Precedence::Not),
+            KwVar    => (None, None, Precedence::Not),
+            KwWhile  => (None, None, Precedence::Not),
+            KwTrue   => (Some(Self::literal), None, Precedence::Not),
+            KwFalse  => (Some(Self::literal), None, Precedence::Not),
+
+            // Ignore
+            Comment    => (None, None, Precedence::Not),
+            Whitespace => (None, None, Precedence::Not),
+
+            Unknown => (None, None, Precedence::Not),
+
+            Eof => (None, None, Precedence::Not),
         }
     }
 
     // Error dur to | no more tokens | prefix | infix error
-    fn parse_precedence(&mut self, prec: Precedence) -> Option<&mut Self> {
+    fn parse_precedence(&mut self, prec: Precedence) -> Result<&mut Self, ParserErr> {
         #[cfg(any(test, debug_assertions))]
         stack_trace(self, "parse_precedence");
 
@@ -156,24 +220,24 @@ where
             prefix_rule(self)?;
         } else {
             log!(self.prev.loc, "Expected an expression (prefix)");
-            return None;
+            return Err(ParserErr::NotPrefix);
         }
 
-        while prec <= Self::get_rule(&self.tokens.peek()?.ty).2 {
+        while prec <= Self::get_rule(&self.curr()?.ty).2 {
             self.advance()?;
 
             if let (_, Some(infix_rule), _) = Self::get_rule(&self.prev.ty) {
                 infix_rule(self)?;
             } else {
                 log!(self.prev.loc, "Expected an expression (infix)");
-                return None;
+                return Err(ParserErr::NotInfix);
             }
         }
 
-        Some(self)
+        Ok(self)
     }
 
-    fn expr(&mut self) -> Option<&mut Self> {
+    fn expr(&mut self) -> Result<&mut Self, ParserErr> {
         #[cfg(any(test, debug_assertions))]
         stack_trace(self, "expr");
 
@@ -181,24 +245,25 @@ where
     }
 
     // Error due to | not a number token | not enough space in chunk pool
-    fn number(&mut self) -> Option<&mut Self> {
+    fn number(&mut self) -> Result<&mut Self, ParserErr> {
         #[cfg(any(test, debug_assertions))]
         stack_trace(self, "number");
 
         match self.prev {
             Token { ty: Num(n), loc } => {
-                constant_add_store(&mut self.chunk, Value::Num(n), loc.start.0);
-                Some(self)
+                constant_add_store(&mut self.chunk, Value::Num(n), loc.start.0)
+                    .ok_or(ParserErr::ValuePoolOverflow)?;
+                Ok(self)
             }
             _ => {
                 log!(self.prev.loc, "Expected a number");
-                None
+                Err(ParserErr::IncorrectToken)
             }
         }
     }
 
     // Error due to | expr error | no RParen after it
-    fn grouping(&mut self) -> Option<&mut Self> {
+    fn grouping(&mut self) -> Result<&mut Self, ParserErr> {
         #[cfg(any(test, debug_assertions))]
         stack_trace(self, "grouping");
 
@@ -208,7 +273,7 @@ where
 
     // Error dut to | expr error | not a minus
     // TODO check if works. Negate opcode after the exression bytes
-    fn unary(&mut self) -> Option<&mut Self> {
+    fn unary(&mut self) -> Result<&mut Self, ParserErr> {
         #[cfg(any(test, debug_assertions))]
         stack_trace(self, "unary");
 
@@ -216,16 +281,18 @@ where
 
         self.parse_precedence(Precedence::Unary)?;
 
-        match operator {
-            t if t.ty == Minus => {
-                self.chunk.add_op(OpCode::Negate, t.loc.start.0);
-                Some(self)
-            }
-            _ => None,
-        }
+        let op_src_line = operator.loc.start.0;
+
+        match operator.ty {
+            Minus => self.chunk.add_op(OpCode::Negate, op_src_line),
+            Bang => self.chunk.add_op(OpCode::Not, op_src_line),
+            _ => return Err(ParserErr::IncorrectToken),
+        };
+
+        Ok(self)
     }
 
-    fn binary(&mut self) -> Option<&mut Self> {
+    fn binary(&mut self) -> Result<&mut Self, ParserErr> {
         #[cfg(any(test, debug_assertions))]
         stack_trace(self, "binary");
 
@@ -234,34 +301,59 @@ where
         let (_, _, prec) = Self::get_rule(&operator.ty);
         self.parse_precedence(prec + 1)?;
 
-        let op_src_line = operator.loc.start.0;
+        let line = operator.loc.start.0;
 
-        match operator {
-            Token { ty: Plus, .. } => self.chunk.add_op(OpCode::Add, op_src_line),
-            Token { ty: Minus, .. } => self.chunk.add_op(OpCode::Subtract, op_src_line),
-            Token { ty: Star, .. } => self.chunk.add_op(OpCode::Multiply, op_src_line),
-            Token { ty: Slash, .. } => self.chunk.add_op(OpCode::Divide, op_src_line),
+        match operator.ty {
+            Plus => self.chunk.add_op(OpCode::Add, line),
+            Minus => self.chunk.add_op(OpCode::Subtract, line),
+            Star => self.chunk.add_op(OpCode::Multiply, line),
+            Slash => self.chunk.add_op(OpCode::Divide, line),
 
-            _ => return None,
+            BangEq => self
+                .chunk
+                .add_op(OpCode::Eq, line)
+                .add_op(OpCode::Not, line),
+
+            EqEq => self.chunk.add_op(OpCode::Eq, line),
+            Greater => self.chunk.add_op(OpCode::Greater, line),
+
+            GreaterEq => self
+                .chunk
+                .add_op(OpCode::Less, line)
+                .add_op(OpCode::Not, line),
+
+            Less => self.chunk.add_op(OpCode::Less, line),
+
+            LessEq => self
+                .chunk
+                .add_op(OpCode::Greater, line)
+                .add_op(OpCode::Not, line),
+
+            _ => return Err(ParserErr::IncorrectToken),
         };
 
-        Some(self)
+        Ok(self)
     }
 
-    fn ret(&mut self) -> Option<&mut Self> {
+    fn literal(&mut self) -> Result<&mut Self, ParserErr> {
+        let op_src_line = self.prev.loc.start.0;
+
+        match self.prev.ty {
+            Type::KwNil => self.chunk.add_op(OpCode::Nil, op_src_line),
+            Type::KwTrue => self.chunk.add_op(OpCode::True, op_src_line),
+            Type::KwFalse => self.chunk.add_op(OpCode::False, op_src_line),
+            _ => return Err(ParserErr::IncorrectToken),
+        };
+
+        Ok(self)
+    }
+
+    fn ret(&mut self) -> Result<&mut Self, ParserErr> {
         #[cfg(any(test, debug_assertions))]
         stack_trace(self, "ret");
 
         self.chunk.add_op(OpCode::Return, self.prev.loc.start.0);
-        Some(self)
-    }
-
-    fn done(self) -> Option<Chunk> {
-        if !self.err && !self.panic {
-            Some(self.chunk)
-        } else {
-            None
-        }
+        Ok(self)
     }
 }
 
@@ -269,7 +361,8 @@ where
 mod debug {
     use super::*;
 
-    pub fn stack_trace<I>(_parser: &mut Parser<I>, _name: &str)
+    #[allow(unused_variables)]
+    pub fn stack_trace<I>(parser: &mut Parser<I>, name: &str)
     where
         I: Iterator<Item = Token>,
     {
@@ -294,8 +387,18 @@ mod tests {
     }
 
     #[test]
-    fn compute_math() {
+    fn arithmetic() {
         let lines = vec!["(-1 + 2) * 3 - -4\n".to_string()];
+
+        log_context! {
+            @lines;
+            run_code(&lines);
+        }
+    }
+
+    #[test]
+    fn logical() {
+        let lines = vec!["!(5 - 4 > 3 * 2 == !nil)\n".to_string()];
 
         log_context! {
             @lines;
