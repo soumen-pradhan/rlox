@@ -5,6 +5,7 @@ use std::fmt::Display;
 
 use crate::value::{Value, ValuePool};
 
+#[derive(Debug)]
 #[repr(u8)]
 pub enum OpCode {
     Return = 0,
@@ -13,12 +14,25 @@ pub enum OpCode {
     Constant,
     ConstantLong,
 
-    // operators
+    // numerical operators
     Negate,
     Add,
     Subtract,
     Multiply,
     Divide,
+
+    // boolean
+    True,
+    False,
+
+    // billion dollar mistake
+    Nil,
+
+    // logical operators
+    Not,
+    Eq,
+    Greater,
+    Less,
 }
 
 impl Display for OpCode {
@@ -34,6 +48,16 @@ impl Display for OpCode {
             Self::Subtract => "sub",
             Self::Multiply => "mul",
             Self::Divide => "div",
+
+            Self::True => "true",
+            Self::False => "false",
+
+            Self::Nil => "nil",
+
+            Self::Not => "not",
+            Self::Eq => "eq",
+            Self::Greater => "grtr",
+            Self::Less => "less",
         };
 
         write!(f, "{:<5}", repr)
@@ -45,16 +69,26 @@ impl TryFrom<u8> for OpCode {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(Self::Return),
+            0x00 => Ok(Self::Return),
 
-            1 => Ok(Self::Constant),
-            2 => Ok(Self::ConstantLong),
+            0x01 => Ok(Self::Constant),
+            0x02 => Ok(Self::ConstantLong),
 
-            3 => Ok(Self::Negate),
-            4 => Ok(Self::Add),
-            5 => Ok(Self::Subtract),
-            6 => Ok(Self::Multiply),
-            7 => Ok(Self::Divide),
+            0x03 => Ok(Self::Negate),
+            0x04 => Ok(Self::Add),
+            0x05 => Ok(Self::Subtract),
+            0x06 => Ok(Self::Multiply),
+            0x07 => Ok(Self::Divide),
+
+            0x08 => Ok(Self::True),
+            0x09 => Ok(Self::False),
+
+            0x0a => Ok(Self::Nil),
+
+            0x0b => Ok(Self::Not),
+            0x0c => Ok(Self::Eq),
+            0x0d => Ok(Self::Greater),
+            0x0e => Ok(Self::Less),
 
             _ => Err(()),
         }
@@ -131,7 +165,7 @@ impl Chunk {
     // Skip on the RLE Units, adding the repeat value of the line.
     // If offset is below the accumulated repeat, then we found the line.
     // if skip - offset == repeat, then we are at a new value.
-    fn offset_to_srcline(&self, offset: usize) -> Option<(usize, bool)> {
+    pub fn offset_to_srcline(&self, offset: usize) -> Option<(usize, bool)> {
         let mut lines_skipped: usize = 0;
 
         for (line, repeat) in self.lines.iter() {
@@ -176,6 +210,8 @@ pub mod debug {
     }
 
     pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> Option<usize> {
+        use OpCode::*;
+
         let instruction = *chunk.get_byte(offset)?;
 
         // Check if the line is the same, if yes print |
@@ -193,16 +229,10 @@ pub mod debug {
             }
 
             Ok(opcode) => match opcode {
-                OpCode::Return => simple_op(opcode, offset),
+                Constant => const_op(chunk, offset),
+                ConstantLong => const_long_op(chunk, offset),
 
-                OpCode::Constant => const_op(chunk, offset),
-                OpCode::ConstantLong => const_long_op(chunk, offset),
-
-                OpCode::Negate
-                | OpCode::Add
-                | OpCode::Subtract
-                | OpCode::Multiply
-                | OpCode::Divide => simple_op(opcode, offset),
+                _ => simple_op(opcode, offset),
             },
         };
 
@@ -221,7 +251,7 @@ pub mod debug {
         match index {
             None => println!("; {}", "Abrupt End".red()),
             Some(index) => {
-                print!("{index:2x} ");
+                print!("{index:02x} ");
 
                 let value = chunk.get_constant(*index as usize);
                 match value {
