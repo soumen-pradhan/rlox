@@ -2,6 +2,7 @@
 
 use std::ops::{Add, AddAssign};
 
+#[derive(Debug)]
 pub struct Stack<T>(Vec<T>);
 
 impl<T> Stack<T> {
@@ -74,10 +75,10 @@ impl std::fmt::Display for Loc {
 #[macro_export]
 macro_rules! try_block {
     { $($token:tt)* } => {{
-        let l = || {
+        let l = || -> Option<_> {
             $($token)*
         };
-        l()
+        Some(l())
     }}
 }
 
