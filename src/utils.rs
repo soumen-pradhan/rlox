@@ -10,6 +10,10 @@ impl<T> Stack<T> {
         Self(Vec::new())
     }
 
+    pub fn empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn reset(&mut self) {
         self.0.clear()
     }
@@ -20,6 +24,10 @@ impl<T> Stack<T> {
 
     pub fn pop(&mut self) -> Option<T> {
         self.0.pop()
+    }
+
+    pub fn top(&self) -> Option<&T> {
+        self.0.last()
     }
 
     pub fn top_mut(&mut self) -> Option<&mut T> {
@@ -89,6 +97,12 @@ pub mod debug {
 
     pub fn stack_trace<T: Display>(stack: &Stack<T>) {
         print!("{:width$}", "", width = 4 + 1 + 4 + 3);
+
+        if stack.empty() {
+            println!("[]");
+            return;
+        }
+
         for val in stack.0.iter() {
             print!("[ {val} ]");
         }
