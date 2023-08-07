@@ -29,7 +29,7 @@ pub fn run_code(lines: &Vec<String>) {
     let _res = vm.interpret(&chunk);
 }
 
-#[derive(Debug, PartialEq, PartialOrd)]
+#[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
 #[repr(u8)]
 enum Precedence {
     Not = 0,
@@ -56,12 +56,39 @@ impl Add<u8> for Precedence {
     }
 }
 
+/**
+ * program    -> decl* EOF
+ * decl       -> funcDecl | varDecl | statement
+ * funcDecl   -> "fun" IDENT "(" param? ")" block
+ * param      -> IDENT ( "," IDENT )*
+ * varDecl    -> "var" IDENT ( "=" expression )? ";"
+ * statement  -> exprStmt | ifStmt | printStmt | forStmt | whileStmt | block | retStmt
+ * exprStmt   -> expression ";"
+ * ifStmt     -> "if" expression "{" statement "}" ( "else" "{" statement "}" )?
+ * printStmt  -> "print" expression ";"
+ * forStmt    -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement
+ * whileStmt  -> "while" "(" expression ")" statement
+ * block      -> "(" decl* ")"
+ * retStmt    -> "return" expression? ";"
+ * expression -> assignment
+ * assignment -> IDENT "=" assignment | logic_or
+ * logic_or   -> logic_and ( "or" logic_and )*
+ * logic_and  -> equality ( "and" equality )*
+ * equality   -> comparison ( ( "!=" | "==" ) comparison )*
+ * comparison -> term ( ( ">" | ">=" | "<" | "<=" ) term )*
+ * term       -> factor ( ( "-" | "+" ) factor )*
+ * factor     -> unary ( ( "/" | "*" ) unary )*
+ * unary      -> ( "!" | "-" ) unary | call
+ * call       -> primary ( "(" arguments? ")" )*
+ * arguments  -> expression ( "," expression )*
+ * primary    -> NUMBER | STRING | "true" | "false" | "nil" | "(" expression ")" | IDENT
+ */
+
 pub struct Parser<I: Iterator> {
     prev: Token,
     tokens: Peekable<I>,
     chunk: Chunk,
-    err: bool,
-    panic: bool,
+    curr_prec: Precedence,
 }
 
 #[derive(Debug)]
@@ -86,24 +113,14 @@ where
 {
     let mut parser = Parser::new(tokens);
 
-    parser
-        .expr()?
-        .consume(Eof, "Expected end of expression")?
-        .ret()?;
+    while parser.curr()?.ty != Type::Eof {
+        parser.decl()?;
+    }
+
+    parser.consume(Eof, "expected end of expression")?.ret()?;
 
     Ok(parser.chunk)
 }
-
-impl<I> Parser<I>
-where
-    I: Iterator<Item = Token>,
-{
-    fn curr(&mut self) -> Result<&Token, ParserErr> {
-        self.tokens.peek().ok_or(ParserErr::NoMoreTokens)
-    }
-}
-
-type ParserFn<I> = fn(&mut Parser<I>) -> Result<&mut Parser<I>, ParserErr>;
 
 impl<I> Parser<I>
 where
@@ -114,18 +131,32 @@ where
             prev: Eof + Loc::empty(),
             tokens,
             chunk: Chunk::new(),
-            err: false,
-            panic: false,
+            curr_prec: Precedence::Not,
         }
     }
 
+    fn curr(&mut self) -> Result<&Token, ParserErr> {
+        self.tokens.peek().ok_or(ParserErr::NoMoreTokens)
+    }
+
+    fn next(&mut self) -> Result<Token, ParserErr> {
+        self.tokens.next().ok_or(ParserErr::NoMoreTokens)
+    }
+}
+
+type ParserFn<I> = fn(&mut Parser<I>) -> Result<&mut Parser<I>, ParserErr>;
+
+impl<I> Parser<I>
+where
+    I: Iterator<Item = Token>,
+{
     // Error due to | no more tokens | Unknown token (Lexer error)
     fn advance(&mut self) -> Result<&mut Self, ParserErr> {
-        #[cfg(any(test, debug_assertions))]
-        stack_trace(self, "advance");
-
         self.prev = match self.tokens.next().ok_or(ParserErr::NoMoreTokens)? {
-            t_err if t_err.ty == Unknown => return Err(ParserErr::UnknownToken),
+            t_err if t_err.ty == Unknown => {
+                log!(t_err.loc, "unknown token found");
+                return Err(ParserErr::UnknownToken);
+            }
             t => t,
         };
 
@@ -135,7 +166,7 @@ where
     // Error due to | no more tokens | incorrect type
     fn consume(&mut self, ty: Type, err_msg: &str) -> Result<&mut Self, ParserErr> {
         #[cfg(any(test, debug_assertions))]
-        stack_trace(self, "consume");
+        stack_trace(self, format!("consume {ty:?}").as_str());
 
         match self.curr()? {
             t if t.ty == ty => self.advance(),
@@ -145,6 +176,64 @@ where
                 Err(ParserErr::IncorrectToken)
             }
         }
+    }
+
+    fn consume_ident(&mut self) -> Result<(u8, u8), ParserErr> {
+        #[cfg(any(test, debug_assertions))]
+        stack_trace(self, "consume_ident");
+
+        let val = match &self.prev {
+            Token {
+                ty: Type::Ident(s), ..
+            } => Value::Symbol(s.clone()),
+            tok => {
+                log!(tok.loc, "expected a variable name");
+                return Err(ParserErr::IncorrectToken);
+            }
+        };
+
+        self.chunk
+            .add_constant(val)
+            .ok_or(ParserErr::ValuePoolOverflow)
+    }
+
+    // Error due to | no more tokens
+    fn match_and_consume(&mut self, expected: Type) -> Result<bool, ParserErr> {
+        #[cfg(any(test, debug_assertions))]
+        stack_trace(self, format!("consume if [{expected:?}]").as_str());
+
+        match self.curr()? {
+            t if t.ty == expected => {
+                self.advance()?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    // Error due to | no more tokens
+    fn sync(&mut self) -> Result<&mut Self, ParserErr> {
+        #[cfg(any(test, debug_assertions))]
+        stack_trace(self, "sync");
+
+        use Type::*;
+
+        while self.curr()?.ty != Eof {
+            if self.prev.ty == Semicolon {
+                break;
+            }
+
+            if matches!(
+                self.curr()?.ty,
+                KwClass | KwFun | KwVar | KwFor | KwIf | KwWhile | KwPrint | KwReturn
+            ) {
+                break;
+            }
+
+            self.advance()?;
+        }
+
+        Ok(self)
     }
 
     #[rustfmt::skip]
@@ -176,8 +265,8 @@ where
             LessEq    => (None, Some(Self::binary), Precedence::Cmp),
 
             // Literals.
-            Ident(_) => (None, None, Precedence::Not),
-            Str(_)   => (None, None, Precedence::Not),
+            Ident(_) => (Some(Self::variable), None, Precedence::Not),
+            Str(_)   => (Some(Self::string), None, Precedence::Not),
             Num(_)   => (Some(Self::number), None, Precedence::Not),
 
             // Keywords.
@@ -211,7 +300,7 @@ where
     // Error dur to | no more tokens | prefix | infix error
     fn parse_precedence(&mut self, prec: Precedence) -> Result<&mut Self, ParserErr> {
         #[cfg(any(test, debug_assertions))]
-        stack_trace(self, "parse_precedence");
+        stack_trace(self, format!("parse_precedence {prec:?}").as_str());
 
         self.advance()?;
 
@@ -219,9 +308,11 @@ where
         if let (Some(prefix_rule), _, _) = Self::get_rule(&self.prev.ty) {
             prefix_rule(self)?;
         } else {
-            log!(self.prev.loc, "Expected an expression (prefix)");
+            log!(self.prev.loc, "expected an expression (prefix)");
             return Err(ParserErr::NotPrefix);
         }
+
+        self.curr_prec = prec; // used in named_variable
 
         while prec <= Self::get_rule(&self.curr()?.ty).2 {
             self.advance()?;
@@ -229,11 +320,78 @@ where
             if let (_, Some(infix_rule), _) = Self::get_rule(&self.prev.ty) {
                 infix_rule(self)?;
             } else {
-                log!(self.prev.loc, "Expected an expression (infix)");
+                log!(self.prev.loc, "expected an expression (infix)");
                 return Err(ParserErr::NotInfix);
             }
         }
 
+        let can_assign = prec <= Precedence::Assign;
+        if can_assign && self.match_and_consume(Type::Eq)? {
+            log!(self.prev.loc, "invalid assignment target");
+            return Err(ParserErr::IncorrectToken);
+        }
+
+        Ok(self)
+    }
+
+    // Error due to | no more tokens
+    fn decl(&mut self) -> Result<&mut Self, ParserErr> {
+        #[cfg(any(test, debug_assertions))]
+        stack_trace(self, "decl");
+
+        let res = if self.match_and_consume(Type::KwVar)? {
+            self.var_decl()
+        } else {
+            self.statement()
+        };
+
+        if res.is_err() {
+            self.sync()?;
+        }
+
+        Ok(self)
+    }
+
+    // Error due to | no more tokens | incorrect token | value pool overflow | ...
+    fn var_decl(&mut self) -> Result<&mut Self, ParserErr> {
+        #[cfg(any(test, debug_assertions))]
+        stack_trace(self, "var_decl");
+
+        self.advance()?;
+
+        let index = self.consume_ident()?;
+
+        // check the init value
+        if self.match_and_consume(Type::Eq)? {
+            self.expr()?;
+        } else {
+            self.chunk.add_op(OpCode::Nil, self.prev.loc.start.0);
+        }
+
+        self.consume(Type::Semicolon, "expected ';' after variable declaration")?;
+
+        self.def_variable(index);
+
+        Ok(self)
+    }
+
+    fn statement(&mut self) -> Result<&mut Self, ParserErr> {
+        #[cfg(any(test, debug_assertions))]
+        stack_trace(self, "statement");
+
+        if self.match_and_consume(Type::KwPrint)? {
+            // print_statement
+            self.expr()?
+                .consume(Type::Semicolon, "expected ';' after value")?;
+
+            self.chunk.add_op(OpCode::Print, self.prev.loc.start.0);
+        } else {
+            // expr_statement
+            self.expr()?
+                .consume(Type::Semicolon, "expected ';' after value")?;
+
+            self.chunk.add_op(OpCode::Pop, self.prev.loc.start.0);
+        }
         Ok(self)
     }
 
@@ -256,7 +414,8 @@ where
                 Ok(self)
             }
             _ => {
-                log!(self.prev.loc, "Expected a number");
+                // unreachable
+                log!(self.prev.loc, "expected a number");
                 Err(ParserErr::IncorrectToken)
             }
         }
@@ -281,12 +440,15 @@ where
 
         self.parse_precedence(Precedence::Unary)?;
 
-        let op_src_line = operator.loc.start.0;
+        let line = operator.loc.start.0;
 
         match operator.ty {
-            Minus => self.chunk.add_op(OpCode::Negate, op_src_line),
-            Bang => self.chunk.add_op(OpCode::Not, op_src_line),
-            _ => return Err(ParserErr::IncorrectToken),
+            Minus => self.chunk.add_op(OpCode::Negate, line),
+            Bang => self.chunk.add_op(OpCode::Not, line),
+            _ => {
+                log!(operator.loc, "expected an unary operator");
+                return Err(ParserErr::IncorrectToken);
+            }
         };
 
         Ok(self)
@@ -329,21 +491,85 @@ where
                 .add_op(OpCode::Greater, line)
                 .add_op(OpCode::Not, line),
 
-            _ => return Err(ParserErr::IncorrectToken),
+            _ => {
+                log!(operator.loc, "expected a binary operator");
+                return Err(ParserErr::IncorrectToken);
+            }
         };
 
         Ok(self)
     }
 
     fn literal(&mut self) -> Result<&mut Self, ParserErr> {
+        #[cfg(any(test, debug_assertions))]
+        stack_trace(self, "literal");
+
         let op_src_line = self.prev.loc.start.0;
 
         match self.prev.ty {
             Type::KwNil => self.chunk.add_op(OpCode::Nil, op_src_line),
             Type::KwTrue => self.chunk.add_op(OpCode::True, op_src_line),
             Type::KwFalse => self.chunk.add_op(OpCode::False, op_src_line),
-            _ => return Err(ParserErr::IncorrectToken),
+            _ => {
+                log!(self.prev.loc, "expected a valid literal");
+                return Err(ParserErr::IncorrectToken);
+            }
         };
+
+        Ok(self)
+    }
+
+    fn string(&mut self) -> Result<&mut Self, ParserErr> {
+        #[cfg(any(test, debug_assertions))]
+        stack_trace(self, "string");
+
+        if let Type::Str(s) = &self.prev.ty {
+            constant_add_store(
+                &mut self.chunk,
+                Value::Str(s.clone()),
+                self.prev.loc.start.0,
+            );
+            Ok(self)
+        } else {
+            log!(self.prev.loc, "expected a string literal");
+            Err(ParserErr::IncorrectToken)
+        }
+    }
+
+    fn def_variable(&mut self, (idx0, idx1): (u8, u8)) {
+        let line = self.prev.loc.start.0;
+        // def idx0 idx1 (always 2 bytes)
+        self.chunk
+            .add_op(OpCode::DefineGlobal, line)
+            .add_byte(idx0, line)
+            .add_byte(idx1, line);
+    }
+
+    fn variable(&mut self) -> Result<&mut Self, ParserErr> {
+        #[cfg(any(test, debug_assertions))]
+        stack_trace(self, "variable");
+
+        self.named_variable()
+    }
+
+    fn named_variable(&mut self) -> Result<&mut Self, ParserErr> {
+        #[cfg(any(test, debug_assertions))]
+        stack_trace(self, "named_variable");
+
+        let (idx0, idx1) = self.consume_ident()?;
+
+        let line = self.prev.loc.start.0;
+
+        // check if assignment should be considered or not
+        let can_assign = self.curr_prec <= Precedence::Assign;
+
+        if can_assign && self.match_and_consume(Type::Eq)? {
+            self.expr()?.chunk.add_op(OpCode::SetGlobal, line);
+        } else {
+            self.chunk.add_op(OpCode::GetGlobal, line);
+        }
+
+        self.chunk.add_byte(idx0, line).add_byte(idx1, line);
 
         Ok(self)
     }
@@ -366,7 +592,10 @@ mod debug {
     where
         I: Iterator<Item = Token>,
     {
-        // log!(parser.prev.loc, name);
+        log!(
+            parser.prev.loc,
+            format!("fn {name}, prev: {:?}", parser.prev.ty).as_str()
+        );
     }
 }
 
@@ -388,7 +617,7 @@ mod tests {
 
     #[test]
     fn arithmetic() {
-        let lines = vec!["(-1 + 2) * 3 - -4\n".to_string()];
+        let lines = vec!["(4 + 2);\n".to_string()];
 
         log_context! {
             @lines;
@@ -398,7 +627,42 @@ mod tests {
 
     #[test]
     fn logical() {
-        let lines = vec!["!(5 - 4 > 3 * 2 == !nil)\n".to_string()];
+        let lines = vec!["!(5 - 4 > 3 * 2 == !nil);\n".to_string()];
+
+        log_context! {
+            @lines;
+            run_code(&lines);
+        }
+    }
+
+    #[test]
+    fn string() {
+        let lines = vec!["\"Ave\" + \"_\" + \"Caesar\";\n".to_string()];
+
+        log_context! {
+            @lines;
+            run_code(&lines);
+        }
+    }
+
+    #[test]
+    fn print_stmt() {
+        let lines = vec!["print (3 + 2) == 5;\n".to_string()];
+
+        log_context! {
+            @lines;
+            run_code(&lines);
+        }
+    }
+
+    #[test]
+    fn var_stmt() {
+        let lines = vec![
+            "var name = 5.2;\n".to_string(),
+            "print name;\n".to_string(),
+            "name = \"Lorem\";\n".to_string(),
+            "print name;\n".to_string(),
+        ];
 
         log_context! {
             @lines;
