@@ -1,5 +1,7 @@
 #![allow(dead_code, unused_unsafe)]
 
+use owo_colors::OwoColorize;
+
 use crate::utils::Loc;
 
 pub mod prelude {
@@ -8,7 +10,8 @@ pub mod prelude {
 }
 
 pub trait Logger {
-    fn err(&self, loc: Loc, msg: &str);
+    fn err_loc(&self, loc: Loc, msg: &str);
+    fn err_line(&self, line: usize, msg: &str);
 }
 
 pub struct ErrorLogger<'a> {
@@ -21,6 +24,7 @@ pub static mut LOGGER: ErrorLogger<'static> = ErrorLogger { lines: None };
 macro_rules! log_context {
     { @ $lines:expr; $($token:tt)* } => {
         unsafe {
+            let og_lines = LOGGER.lines;
             // Get a reference with 'static lifetime, extending the lifetime of `lines`
             let lines_static: &'static Vec<String> = std::mem::transmute(&$lines);
             LOGGER.lines = Some(lines_static);
@@ -28,7 +32,7 @@ macro_rules! log_context {
             $($token)*
 
             // Reset LOGGER.lines to None at the end of the block
-            LOGGER.lines = None;
+            LOGGER.lines = og_lines;
         }
     };
 }
@@ -36,9 +40,15 @@ macro_rules! log_context {
 #[macro_export]
 macro_rules! log {
     // TODO expr to specific types
+    (line $loc:expr, $msg:expr) => {
+        unsafe {
+            LOGGER.err_line($loc, $msg);
+        }
+    };
+
     ($loc:expr, $msg:expr) => {
         unsafe {
-            LOGGER.err($loc, $msg);
+            LOGGER.err_loc($loc, $msg);
         }
     };
 }
@@ -56,17 +66,18 @@ impl<'a> ErrorLogger<'a> {
 }
 
 impl<'a> Logger for ErrorLogger<'a> {
-    fn err(&self, loc: Loc, msg: &str) {
+    fn err_loc(&self, loc: Loc, msg: &str) {
         let Loc { start, end } = loc;
 
         let line_pad = digits(end.0);
-        let e = ""; // empty str
+        let (e, e_red) = ("", "".red()); // empty str
+        let msg = msg.red();
 
         // single line
         if start.0 == end.0 {
             println!("{} | {}", start.0 + 1, self.get_line(start.0));
             println!(
-                "{e:line_pad$} | {e:space_pad$}{e:^<caret_pad$} {msg}",
+                "{e:line_pad$} | {e:space_pad$}{e_red:^<caret_pad$} {msg}",
                 space_pad = start.1,
                 caret_pad = end.1 - start.1 + 1
             );
@@ -79,7 +90,7 @@ impl<'a> Logger for ErrorLogger<'a> {
             let first_line = self.get_line(start.0);
             println!("{:line_pad$} | {first_line}", start.0 + 1);
             println!(
-                "{e:line_pad$} | {e:space_pad$}{e:^<caret_pad$}",
+                "{e:line_pad$} | {e:space_pad$}{e_red:^<caret_pad$}",
                 space_pad = start.1,
                 caret_pad = first_line.len() - start.1
             );
@@ -90,8 +101,15 @@ impl<'a> Logger for ErrorLogger<'a> {
             }
 
             println!("{:line_pad$} | {}", end.0 + 1, self.get_line(end.0));
-            println!("{e:line_pad$} | {e:^<caret_pad$} {msg}", caret_pad = end.1);
+            println!(
+                "{e:line_pad$} | {e_red:^<caret_pad$} {msg}",
+                caret_pad = end.1
+            );
         }
+    }
+
+    fn err_line(&self, line: usize, msg: &str) {
+        println!("{} | {} {}", line + 1, self.get_line(line), msg.red());
     }
 }
 
