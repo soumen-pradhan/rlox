@@ -33,6 +33,14 @@ pub enum OpCode {
     Eq,
     Greater,
     Less,
+
+    // Side-effects
+    Print,
+    Pop,
+
+    DefineGlobal,
+    GetGlobal,
+    SetGlobal,
 }
 
 impl Display for OpCode {
@@ -58,6 +66,13 @@ impl Display for OpCode {
             Self::Eq => "eq",
             Self::Greater => "grtr",
             Self::Less => "less",
+
+            Self::Print => "print",
+            Self::Pop => "pop",
+
+            Self::DefineGlobal => "def",
+            Self::GetGlobal => "get",
+            Self::SetGlobal => "set",
         };
 
         write!(f, "{:<5}", repr)
@@ -89,6 +104,13 @@ impl TryFrom<u8> for OpCode {
             0x0c => Ok(Self::Eq),
             0x0d => Ok(Self::Greater),
             0x0e => Ok(Self::Less),
+
+            0x0f => Ok(Self::Print),
+            0x10 => Ok(Self::Pop),
+
+            0x11 => Ok(Self::DefineGlobal),
+            0x12 => Ok(Self::GetGlobal),
+            0x13 => Ok(Self::SetGlobal),
 
             _ => Err(()),
         }
@@ -133,8 +155,8 @@ impl Chunk {
         self
     }
 
-    pub fn get_byte(&self, index: usize) -> Option<&u8> {
-        self.code.get(index)
+    pub fn get_byte(&self, index: usize) -> Option<u8> {
+        self.code.get(index).copied()
     }
 
     pub fn add_op(&mut self, op: OpCode, line: usize) -> &mut Self {
@@ -143,16 +165,23 @@ impl Chunk {
 
     // instruction const can have max 2 operands (u8 << 8 | u8)
     pub fn add_constant(&mut self, val: Value) -> Option<(u8, u8)> {
-        let len = self.constants.len();
+        // check if value already exists, then return that index.
 
-        if len >= u16::MAX as usize {
-            return None;
-        }
+        let index = match self.constants.iter().position(|v| v == &val) {
+            Some(idx) => idx,
+            None => {
+                let len = self.constants.len();
+                if len >= u16::MAX as usize {
+                    return None;
+                }
 
-        self.constants.add(val);
+                self.constants.push(val);
+                len
+            }
+        };
 
-        let byte1 = (len & 0xFF) as u8;
-        let byte2 = ((len >> 8) & 0xFF) as u8;
+        let byte1 = (index & 0xFF) as u8;
+        let byte2 = ((index >> 8) & 0xFF) as u8;
 
         Some((byte1, byte2))
     }
@@ -212,7 +241,7 @@ pub mod debug {
     pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> Option<usize> {
         use OpCode::*;
 
-        let instruction = *chunk.get_byte(offset)?;
+        let instruction = chunk.get_byte(offset)?;
 
         // Check if the line is the same, if yes print |
         let (line, line_repeated) = chunk.offset_to_srcline(offset)?;
@@ -228,24 +257,26 @@ pub mod debug {
                 offset + 1
             }
 
-            Ok(opcode) => match opcode {
-                Constant => const_op(chunk, offset),
-                ConstantLong => const_long_op(chunk, offset),
+            Ok(op) => match op {
+                Constant => byte1_op(op, chunk, offset),
+                ConstantLong => byte2_op(op, chunk, offset),
 
-                _ => simple_op(opcode, offset),
+                DefineGlobal | GetGlobal | SetGlobal => byte2_op(op, chunk, offset),
+
+                _ => byte0_op(op, offset),
             },
         };
 
         Some(ret)
     }
 
-    fn simple_op(op: OpCode, offset: usize) -> usize {
+    fn byte0_op(op: OpCode, offset: usize) -> usize {
         println!("{op}");
         offset + 1
     }
 
-    fn const_op(chunk: &Chunk, offset: usize) -> usize {
-        print!("{} ", OpCode::Constant);
+    fn byte1_op(op: OpCode, chunk: &Chunk, offset: usize) -> usize {
+        print!("{op} ");
 
         let index = chunk.get_byte(offset + 1);
         match index {
@@ -253,10 +284,10 @@ pub mod debug {
             Some(index) => {
                 print!("{index:02x} ");
 
-                let value = chunk.get_constant(*index as usize);
+                let value = chunk.get_constant(index as usize);
                 match value {
                     None => println!("; {}", "No Value".red()),
-                    Some(value) => println!("; {value}"),
+                    Some(value) => println!("; val {value}"),
                 }
             }
         }
@@ -264,28 +295,28 @@ pub mod debug {
         offset + 2
     }
 
-    fn const_long_op(chunk: &Chunk, offset: usize) -> usize {
-        print!("{} ", OpCode::ConstantLong);
+    fn byte2_op(op: OpCode, chunk: &Chunk, offset: usize) -> usize {
+        print!("{op} ");
 
         let idx0 = chunk.get_byte(offset + 1);
         match idx0 {
             None => println!("; {}", "Abrupt End".red()),
 
             Some(idx0) => {
-                print!("{idx0:2x} ");
+                print!("{idx0:02x} ");
 
                 let idx1 = chunk.get_byte(offset + 2);
                 match idx1 {
                     None => println!("; {}", "Abrupt End".red()),
 
                     Some(idx1) => {
-                        print!("{idx1:2x} ");
+                        print!("{idx1:02x} ");
 
-                        let index = (*idx1 as usize) << 8 | (*idx0 as usize);
+                        let index = (idx1 as usize) << 8 | (idx0 as usize);
                         let value = chunk.get_constant(index);
                         match value {
                             None => println!("; {}", "No Value".red()),
-                            Some(value) => println!("; {value}"),
+                            Some(value) => println!("; val {value}"),
                         }
                     }
                 }
